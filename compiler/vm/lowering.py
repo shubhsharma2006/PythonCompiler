@@ -30,6 +30,8 @@ from compiler.core.ast import (
     TupleExpr,
     UnaryExpr,
     WhileStmt,
+    BreakStmt,
+    ContinueStmt,
 )
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule, Instruction
 
@@ -39,6 +41,7 @@ class BytecodeLowerer:
         self.label_counter = 0
         self.function_counter = 0
         self.functions: dict[str, BytecodeFunction] = {}
+        self.loop_stack: list[tuple[str, str]] = []
 
     def lower(self, program: Program, *, module_name: str = "__main__", filename: str = "<stdin>") -> BytecodeModule:
         self.functions = {}
@@ -48,7 +51,7 @@ class BytecodeLowerer:
                 lowered = self._lower_function(statement, parent_key=module_name)
                 top_level_bindings[statement.name] = lowered.key
 
-        entry = self._lower_body("<module>", [], [statement for statement in program.body if not isinstance(statement, FunctionDef)])
+        entry = self._lower_body("<module>", [], program.body)
         entry.key = f"{module_name}:<module>"
         return BytecodeModule(
             name=module_name,
@@ -62,6 +65,7 @@ class BytecodeLowerer:
         function_key = self._new_function_key(parent_key, function.name)
         lowered = self._lower_body(function.name, function.params, function.body, parent_key=function_key)
         lowered.key = function_key
+        lowered.defaults = [self._literal_default(default) for default in function.defaults]
         self.functions[function_key] = lowered
         return lowered
 
@@ -76,7 +80,9 @@ class BytecodeLowerer:
     def _emit_statement(self, statement, instructions: list[Instruction], parent_key: str) -> None:
         if isinstance(statement, FunctionDef):
             lowered = self._lower_function(statement, parent_key=parent_key)
-            instructions.append(Instruction("MAKE_FUNCTION", lowered.key))
+            for default in statement.defaults:
+                self._emit_expr(default, instructions)
+            instructions.append(Instruction("MAKE_FUNCTION", (lowered.key, len(statement.defaults))))
             instructions.append(Instruction("STORE_NAME", statement.name))
             return
 
@@ -183,28 +189,66 @@ class BytecodeLowerer:
 
         if isinstance(statement, WhileStmt):
             start_label = self._new_label("while_start")
-            end_label = self._new_label("while_end")
+            if statement.orelse:
+                orelse_label = self._new_label("while_else")
+                end_label = self._new_label("while_end")
+                false_target = orelse_label
+                break_target = end_label
+            else:
+                end_label = self._new_label("while_end")
+                false_target = end_label
+                break_target = end_label
             instructions.append(Instruction("LABEL", start_label))
             self._emit_expr(statement.condition, instructions)
-            instructions.append(Instruction("JUMP_IF_FALSE", end_label))
+            instructions.append(Instruction("JUMP_IF_FALSE", false_target))
+            self.loop_stack.append((start_label, break_target))
             for child in statement.body:
                 self._emit_statement(child, instructions, parent_key)
+            self.loop_stack.pop()
             instructions.append(Instruction("JUMP", start_label))
+            if statement.orelse:
+                instructions.append(Instruction("LABEL", orelse_label))
+                for child in statement.orelse:
+                    self._emit_statement(child, instructions, parent_key)
             instructions.append(Instruction("LABEL", end_label))
             return
 
         if isinstance(statement, ForStmt):
             start_label = self._new_label("for_start")
-            end_label = self._new_label("for_end")
+            if statement.orelse:
+                orelse_label = self._new_label("for_else")
+                end_label = self._new_label("for_end")
+                false_target = orelse_label
+                break_target = end_label
+            else:
+                end_label = self._new_label("for_end")
+                false_target = end_label
+                break_target = end_label
             self._emit_expr(statement.iterator, instructions)
             instructions.append(Instruction("GET_ITER"))
             instructions.append(Instruction("LABEL", start_label))
-            instructions.append(Instruction("FOR_ITER", end_label))
+            instructions.append(Instruction("FOR_ITER", false_target))
             instructions.append(Instruction("STORE_NAME", statement.target))
+            self.loop_stack.append((start_label, break_target))
             for child in statement.body:
                 self._emit_statement(child, instructions, parent_key)
+            self.loop_stack.pop()
             instructions.append(Instruction("JUMP", start_label))
+            if statement.orelse:
+                instructions.append(Instruction("LABEL", orelse_label))
+                for child in statement.orelse:
+                    self._emit_statement(child, instructions, parent_key)
             instructions.append(Instruction("LABEL", end_label))
+            return
+
+        if isinstance(statement, BreakStmt):
+            if self.loop_stack:
+                instructions.append(Instruction("JUMP", self.loop_stack[-1][1]))
+            return
+
+        if isinstance(statement, ContinueStmt):
+            if self.loop_stack:
+                instructions.append(Instruction("JUMP", self.loop_stack[-1][0]))
             return
 
         if isinstance(statement, ReturnStmt):
@@ -264,7 +308,12 @@ class BytecodeLowerer:
         if isinstance(expr, CallExpr):
             for arg in expr.args:
                 self._emit_expr(arg, instructions)
-            instructions.append(Instruction("CALL_FUNCTION", (expr.func_name, len(expr.args))))
+            if expr.kwargs:
+                for value in expr.kwargs.values():
+                    self._emit_expr(value, instructions)
+                instructions.append(Instruction("CALL_FUNCTION_KW", (expr.func_name, len(expr.args), list(expr.kwargs.keys()))))
+            else:
+                instructions.append(Instruction("CALL_FUNCTION", (expr.func_name, len(expr.args))))
             return
 
         if isinstance(expr, ListExpr):
@@ -307,10 +356,31 @@ class BytecodeLowerer:
             self._emit_expr(expr.object, instructions)
             for arg in expr.args:
                 self._emit_expr(arg, instructions)
-            instructions.append(Instruction("CALL_METHOD", (expr.method_name, len(expr.args))))
+            if expr.kwargs:
+                for value in expr.kwargs.values():
+                    self._emit_expr(value, instructions)
+                instructions.append(Instruction("CALL_METHOD_KW", (expr.method_name, len(expr.args), list(expr.kwargs.keys()))))
+            else:
+                instructions.append(Instruction("CALL_METHOD", (expr.method_name, len(expr.args))))
             return
 
         instructions.append(Instruction("LOAD_CONST", None))
+
+    def _literal_default(self, expr):
+        if isinstance(expr, ConstantExpr):
+            return expr.value
+        if isinstance(expr, ListExpr):
+            return [self._literal_default(element) for element in expr.elements]
+        if isinstance(expr, TupleExpr):
+            return tuple(self._literal_default(element) for element in expr.elements)
+        if isinstance(expr, DictExpr):
+            return {
+                self._literal_default(key): self._literal_default(value)
+                for key, value in zip(expr.keys, expr.values)
+            }
+        if isinstance(expr, SetExpr):
+            return {self._literal_default(element) for element in expr.elements}
+        return None
 
     def _new_label(self, prefix: str) -> str:
         self.label_counter += 1

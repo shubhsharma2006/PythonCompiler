@@ -174,6 +174,8 @@ class TypeChecker:
                 self._error(statement.condition, f"condition must be bool or numeric, got {condition_type.value}")
             for child in statement.body:
                 self._check_statement(child, scope)
+            for child in statement.orelse:
+                self._check_statement(child, scope)
             return
 
         if isinstance(statement, ForStmt):
@@ -184,6 +186,8 @@ class TypeChecker:
             if iterator_type == ValueType.VOID:
                 self._error(statement.iterator, "for-loop iterator cannot be void")
             for child in statement.body:
+                self._check_statement(child, scope)
+            for child in statement.orelse:
                 self._check_statement(child, scope)
             return
 

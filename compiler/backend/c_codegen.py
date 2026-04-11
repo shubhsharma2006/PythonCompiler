@@ -36,14 +36,14 @@ class CCodeGenerator:
     def _emit_main(self, function: IRFunction) -> list[str]:
         lines = ["int main(void) {"]
         lines.extend(self._emit_locals(function))
-        lines.extend(self._emit_blocks(function.blocks))
+        lines.extend(self._emit_blocks(function.blocks, function))
         lines.append("}")
         return lines
 
     def _emit_function(self, function: IRFunction) -> list[str]:
         lines = [f"{self._prototype(function)} {{"]
         lines.extend(self._emit_locals(function))
-        lines.extend(self._emit_blocks(function.blocks))
+        lines.extend(self._emit_blocks(function.blocks, function))
         lines.append("}")
         return lines
 
@@ -61,7 +61,8 @@ class CCodeGenerator:
         lines.append("")
         return lines
 
-    def _emit_blocks(self, blocks: list[BasicBlock]) -> list[str]:
+    def _emit_blocks(self, blocks: list[BasicBlock], function: IRFunction) -> list[str]:
+        type_map = self._build_type_map(function)
         lines: list[str] = []
         for block in blocks:
             lines.append(f"{block.name}: ;")
@@ -71,22 +72,25 @@ class CCodeGenerator:
                 elif isinstance(instruction, Assign):
                     lines.append(f"    {instruction.target} = {instruction.source};")
                 elif isinstance(instruction, BinaryOp):
-                    left = instruction.left
-                    right = instruction.right
-                    if instruction.value_type == ValueType.FLOAT and instruction.op in {"+", "-", "*", "/", "%"}:
-                        left = f"((double) {left})"
-                        right = f"((double) {right})"
-                    lines.append(f"    {instruction.target} = {left} {instruction.op} {right};")
+                    if instruction.value_type == ValueType.STRING and instruction.op == "+":
+                        lines.append(f"    {instruction.target} = py_str_concat({instruction.left}, {instruction.right});")
+                    else:
+                        left = instruction.left
+                        right = instruction.right
+                        if instruction.value_type == ValueType.FLOAT and instruction.op in {"+", "-", "*", "/", "%"}:
+                            left = f"((double) {left})"
+                            right = f"((double) {right})"
+                        lines.append(f"    {instruction.target} = {left} {instruction.op} {right};")
                 elif isinstance(instruction, UnaryOp):
                     lines.append(f"    {instruction.target} = {instruction.op}{instruction.operand};")
                 elif isinstance(instruction, Call):
-                    call_text = f"{instruction.func_name}({', '.join(instruction.args)})"
+                    call_text = self._emit_call(instruction, type_map)
                     if instruction.target is None:
                         lines.append(f"    {call_text};")
                     else:
                         lines.append(f"    {instruction.target} = {call_text};")
                 elif isinstance(instruction, Print):
-                    lines.append(f"    {self.runtime.print_call(instruction.value, instruction.value_type)}")
+                    lines.append(f"    {self.runtime.print_call(instruction.value, instruction.value_type, instruction.newline)}")
 
             terminator = block.terminator
             if isinstance(terminator, JumpTerminator):
@@ -101,6 +105,23 @@ class CCodeGenerator:
                     lines.append(f"    return {terminator.value};")
         return lines
 
+    def _emit_call(self, instruction: Call, type_map: dict[str, ValueType]) -> str:
+        """Generate a C function call, mapping Python builtins to C runtime functions."""
+        if instruction.func_name in ("str", "repr", "ascii") and len(instruction.args) == 1:
+            arg_type = type_map.get(instruction.args[0], ValueType.UNKNOWN)
+            converter = self.runtime.str_converter(arg_type)
+            return f"{converter}({instruction.args[0]})"
+        return f"{instruction.func_name}({', '.join(instruction.args)})"
+
+    @staticmethod
+    def _build_type_map(function: IRFunction) -> dict[str, ValueType]:
+        """Build a variable-name → type map from function params and locals."""
+        type_map: dict[str, ValueType] = {}
+        for name, vtype in function.params:
+            type_map[name] = vtype
+        type_map.update(function.locals)
+        return type_map
+
     @staticmethod
     def _default_initializer(value_type: ValueType) -> str:
         if value_type == ValueType.FLOAT:
@@ -108,14 +129,14 @@ class CCodeGenerator:
         if value_type in (ValueType.INT, ValueType.BOOL):
             return "0"
         if value_type == ValueType.STRING:
-            return "\"\""
+            return '""'
         return "0"
 
     @staticmethod
     def _literal(value: object, value_type: ValueType) -> str:
         if value_type == ValueType.STRING:
             escaped = str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-            return f"\"{escaped}\""
+            return f'"{escaped}"'
         if value_type == ValueType.BOOL:
             return "1" if value else "0"
         if value_type == ValueType.FLOAT:

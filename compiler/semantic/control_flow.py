@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from compiler.core.ast import ClassDef, ForStmt, FunctionDef, IfStmt, Program, ReturnStmt, TryStmt, WhileStmt
+from compiler.core.ast import ClassDef, ForStmt, FunctionDef, IfStmt, Program, ReturnStmt, TryStmt, WhileStmt, BreakStmt, ContinueStmt
 from compiler.core.types import ValueType
 from compiler.semantic.model import SymbolTable
 from compiler.utils.error_handler import ErrorHandler
@@ -28,14 +28,24 @@ class ControlFlowChecker:
                 self._check_statements(statement.body, table)
                 self._check_statements(statement.orelse, table)
             elif isinstance(statement, WhileStmt):
+                self.in_loop = getattr(self, "in_loop", 0) + 1
                 self._check_statements(statement.body, table)
+                self.in_loop -= 1
+                self._check_statements(statement.orelse, table)
             elif isinstance(statement, ForStmt):
+                self.in_loop = getattr(self, "in_loop", 0) + 1
                 self._check_statements(statement.body, table)
+                self.in_loop -= 1
+                self._check_statements(statement.orelse, table)
             elif isinstance(statement, TryStmt):
                 self._check_statements(statement.body, table)
                 for handler in statement.handlers:
                     self._check_statements(handler.body, table)
                 self._check_statements(statement.finalbody, table)
+            elif isinstance(statement, (BreakStmt, ContinueStmt)):
+                if not getattr(self, "in_loop", 0):
+                    name = "break" if isinstance(statement, BreakStmt) else "continue"
+                    self._error(statement, f"{name} outside loop")
 
     def _must_return(self, statements) -> bool:
         for statement in statements:

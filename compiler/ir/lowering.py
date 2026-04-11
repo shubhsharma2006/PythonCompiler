@@ -8,6 +8,7 @@ from compiler.core.ast import (
     CompareExpr,
     ConstantExpr,
     ExprStmt,
+    ForStmt,
     FunctionDef,
     IfStmt,
     NameExpr,
@@ -16,6 +17,8 @@ from compiler.core.ast import (
     ReturnStmt,
     UnaryExpr,
     WhileStmt,
+    BreakStmt,
+    ContinueStmt,
 )
 from compiler.core.types import ValueType
 from compiler.ir.cfg import (
@@ -42,6 +45,7 @@ class CFGLowering:
         self.block_counter = 0
         self.current_function: CFGFunction | None = None
         self.current_block: BasicBlock | None = None
+        self.loop_stack: list[tuple[str, str]] = []
 
     def generate(self, program: Program) -> CFGModule:
         main_function = self._new_function("main", [], ValueType.INT)
@@ -154,8 +158,24 @@ class CFGLowering:
             return
 
         if isinstance(statement, PrintStmt):
-            value_name, value_type = self._emit_expr(statement.values[0])
-            self._emit(Print(value_name, value_type))
+            for i, value_expr in enumerate(statement.values):
+                value_name, value_type = self._emit_expr(value_expr)
+                self._emit(Print(value_name, value_type, newline=False))
+                if i < len(statement.values) - 1:
+                    if statement.sep is not None:
+                        sep_name, sep_type = self._emit_expr(statement.sep)
+                        self._emit(Print(sep_name, sep_type, newline=False))
+                    else:
+                        sep_temp = self._new_temp(ValueType.STRING)
+                        self._emit(LoadConst(sep_temp, " ", ValueType.STRING))
+                        self._emit(Print(sep_temp, ValueType.STRING, newline=False))
+            if statement.end is not None:
+                end_name, end_type = self._emit_expr(statement.end)
+                self._emit(Print(end_name, end_type, newline=False))
+            else:
+                end_temp = self._new_temp(ValueType.STRING)
+                self._emit(LoadConst(end_temp, "\n", ValueType.STRING))
+                self._emit(Print(end_temp, ValueType.STRING, newline=False))
             return
 
         if isinstance(statement, ExprStmt):
@@ -188,20 +208,116 @@ class CFGLowering:
         if isinstance(statement, WhileStmt):
             cond_block = self._new_block("while_cond")
             body_block = self._new_block("while_body")
-            exit_block = self._new_block("while_exit")
+            if statement.orelse:
+                orelse_block = self._new_block("while_else")
+                exit_block = self._new_block("while_exit")
+                false_target = orelse_block.name
+                break_target = exit_block.name
+            else:
+                exit_block = self._new_block("while_exit")
+                false_target = exit_block.name
+                break_target = exit_block.name
             self._terminate(JumpTerminator(cond_block.name))
 
             self._switch_to(cond_block)
             condition_name, _ = self._emit_expr(statement.condition)
-            self._terminate(BranchTerminator(condition_name, body_block.name, exit_block.name))
+            self._terminate(BranchTerminator(condition_name, body_block.name, false_target))
 
             self._switch_to(body_block)
+            self.loop_stack.append((cond_block.name, break_target))
             for child in statement.body:
                 self._emit_statement(child)
+            self.loop_stack.pop()
             if self.current_block.terminator is None:
                 self._terminate(JumpTerminator(cond_block.name))
 
+            if statement.orelse:
+                self._switch_to(orelse_block)
+                for child in statement.orelse:
+                    self._emit_statement(child)
+                if self.current_block.terminator is None:
+                    self._terminate(JumpTerminator(exit_block.name))
+
             self._switch_to(exit_block)
+            return
+
+        if isinstance(statement, ForStmt):
+            if not isinstance(statement.iterator, CallExpr) or statement.iterator.func_name != "range":
+                return
+            range_args = statement.iterator.args
+            if len(range_args) == 1:
+                start_temp = self._new_temp(ValueType.INT)
+                self._emit(LoadConst(start_temp, 0, ValueType.INT))
+                stop_name, _ = self._emit_expr(range_args[0])
+                step_val = 1
+            elif len(range_args) == 2:
+                start_temp, _ = self._emit_expr(range_args[0])
+                stop_name, _ = self._emit_expr(range_args[1])
+                step_val = 1
+            else:
+                start_temp, _ = self._emit_expr(range_args[0])
+                stop_name, _ = self._emit_expr(range_args[1])
+                step_val = range_args[2].value if isinstance(range_args[2], ConstantExpr) else 1
+
+            iter_var = statement.target
+            if iter_var not in self.current_function.locals:
+                self.current_function.locals[iter_var] = ValueType.INT
+            self._emit(Assign(iter_var, start_temp))
+
+            cond_block = self._new_block("for_cond")
+            body_block = self._new_block("for_body")
+            if statement.orelse:
+                orelse_block = self._new_block("for_else")
+                exit_block = self._new_block("for_exit")
+                false_target = orelse_block.name
+                break_target = exit_block.name
+            else:
+                exit_block = self._new_block("for_exit")
+                false_target = exit_block.name
+                break_target = exit_block.name
+            self._terminate(JumpTerminator(cond_block.name))
+
+            self._switch_to(cond_block)
+            cond_temp = self._new_temp(ValueType.BOOL)
+            compare_op = ">" if isinstance(step_val, (int, float)) and step_val < 0 else "<"
+            self._emit(BinaryOp(cond_temp, compare_op, iter_var, stop_name, ValueType.BOOL))
+            self._terminate(BranchTerminator(cond_temp, body_block.name, false_target))
+
+            self._switch_to(body_block)
+            self.loop_stack.append((cond_block.name, break_target))
+            for child in statement.body:
+                self._emit_statement(child)
+            self.loop_stack.pop()
+
+            if len(range_args) == 3:
+                step_name, _ = self._emit_expr(range_args[2])
+            else:
+                step_name = self._new_temp(ValueType.INT)
+                self._emit(LoadConst(step_name, 1, ValueType.INT))
+            step_result = self._new_temp(ValueType.INT)
+            self._emit(BinaryOp(step_result, "+", iter_var, step_name, ValueType.INT))
+            self._emit(Assign(iter_var, step_result))
+            if self.current_block.terminator is None:
+                self._terminate(JumpTerminator(cond_block.name))
+
+            if statement.orelse:
+                self._switch_to(orelse_block)
+                for child in statement.orelse:
+                    self._emit_statement(child)
+                if self.current_block.terminator is None:
+                    self._terminate(JumpTerminator(exit_block.name))
+
+            self._switch_to(exit_block)
+            return
+
+        if isinstance(statement, BreakStmt):
+            if self.loop_stack:
+                self._terminate(JumpTerminator(self.loop_stack[-1][1]))
+            return
+
+        if isinstance(statement, ContinueStmt):
+            if self.loop_stack:
+                self._terminate(JumpTerminator(self.loop_stack[-1][0]))
             return
 
         if isinstance(statement, ReturnStmt):

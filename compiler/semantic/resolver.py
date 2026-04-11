@@ -144,12 +144,16 @@ class NameResolver:
             self._resolve_expr(statement.condition, scope)
             for child in statement.body:
                 self._resolve_statement(child, scope)
+            for child in statement.orelse:
+                self._resolve_statement(child, scope)
             return
 
         if isinstance(statement, ForStmt):
             self._resolve_expr(statement.iterator, scope)
             scope.define(statement.target, ValueType.UNKNOWN)
             for child in statement.body:
+                self._resolve_statement(child, scope)
+            for child in statement.orelse:
                 self._resolve_statement(child, scope)
             return
 

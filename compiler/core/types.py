@@ -22,6 +22,7 @@ class FunctionType:
     name: str
     param_names: list[str]
     param_types: list[ValueType]
+    defaults_count: int = 0
     return_type: ValueType = ValueType.UNKNOWN
     state: str = "unvisited"
     reachable: bool = False

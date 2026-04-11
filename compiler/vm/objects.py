@@ -83,6 +83,7 @@ class ModuleObject:
 class Closure:
     function: BytecodeFunction
     closure_scopes: list[dict[str, object]]
+    defaults: list[object] = field(default_factory=list)
 
 
 @dataclass
@@ -222,31 +223,79 @@ def py_invoke_callable(
     args: list[object],
     module: ModuleObject,
     *,
+    kwargs: dict[str, object] | None = None,
     execute_function: Callable[[BytecodeFunction, list[object], ModuleObject, list[dict[str, object]] | None], object],
 ) -> object:
     callable_obj = unwrap_runtime_value(callable_obj)
     args = [unwrap_runtime_value(arg) for arg in args]
+    kwargs = {key: unwrap_runtime_value(value) for key, value in (kwargs or {}).items()}
     if isinstance(callable_obj, BytecodeFunction):
-        return execute_function(callable_obj, args, module, None)
+        bound_args = bind_function_args(callable_obj.name, callable_obj.params, callable_obj.defaults, args, kwargs)
+        return execute_function(callable_obj, bound_args, module, None)
     if isinstance(callable_obj, Closure):
-        return execute_function(callable_obj.function, args, module, callable_obj.closure_scopes)
+        defaults = callable_obj.defaults or callable_obj.function.defaults
+        bound_args = bind_function_args(callable_obj.function.name, callable_obj.function.params, defaults, args, kwargs)
+        return execute_function(callable_obj.function, bound_args, module, callable_obj.closure_scopes)
     if isinstance(callable_obj, BoundMethod):
         if isinstance(callable_obj.function, BytecodeFunction):
-            return execute_function(callable_obj.function, [callable_obj.instance, *args], module, None)
+            bound_args = bind_function_args(
+                callable_obj.function.name,
+                callable_obj.function.params,
+                callable_obj.function.defaults,
+                [callable_obj.instance, *args],
+                kwargs,
+            )
+            return execute_function(callable_obj.function, bound_args, module, None)
         if callable(callable_obj.function):
-            return callable_obj.function(callable_obj.instance, *args)
+            return callable_obj.function(callable_obj.instance, *args, **kwargs)
         raise VMError("invalid bound method")
     if isinstance(callable_obj, ClassObject):
         instance = InstanceObject(class_object=callable_obj)
         initializer = callable_obj.methods.get("__init__")
         if initializer is not None:
-            execute_function(initializer, [instance, *args], module, None)
-        elif args:
+            bound_args = bind_function_args(initializer.name, initializer.params, initializer.defaults, [instance, *args], kwargs)
+            execute_function(initializer, bound_args, module, None)
+        elif args or kwargs:
             raise VMError(f"class {callable_obj.name!r} takes no arguments")
         return instance
     if callable(callable_obj):
         try:
-            return callable_obj(*args)
+            return callable_obj(*args, **kwargs)
         except TypeError as exc:
             raise VMError(str(exc)) from None
     raise VMError(f"cannot call {callable_obj!r}")
+
+
+def bind_function_args(
+    function_name: str,
+    params: list[str],
+    defaults: list[object],
+    args: list[object],
+    kwargs: dict[str, object] | None = None,
+) -> list[object]:
+    kwargs = dict(kwargs or {})
+    if len(args) > len(params):
+        raise VMError(f"function {function_name!r} expects at most {len(params)} arguments, got {len(args)}")
+
+    values: dict[str, object] = {}
+    for index, arg in enumerate(args):
+        values[params[index]] = arg
+
+    for name, value in kwargs.items():
+        if name not in params:
+            raise VMError(f"function {function_name!r} got unexpected keyword argument {name!r}")
+        if name in values:
+            raise VMError(f"function {function_name!r} got multiple values for argument {name!r}")
+        values[name] = value
+
+    first_default_index = len(params) - len(defaults)
+    for index, name in enumerate(params):
+        if name in values:
+            continue
+        default_index = index - first_default_index
+        if 0 <= default_index < len(defaults):
+            values[name] = defaults[default_index]
+            continue
+        raise VMError(f"function {function_name!r} missing required argument {name!r}")
+
+    return [values[name] for name in params]

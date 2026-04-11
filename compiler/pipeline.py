@@ -81,9 +81,9 @@ def _program_uses_imports(program: Program) -> bool:
                 return True
             if isinstance(statement, IfStmt) and (walk(statement.body) or walk(statement.orelse)):
                 return True
-            if isinstance(statement, WhileStmt) and walk(statement.body):
+            if isinstance(statement, WhileStmt) and (walk(statement.body) or walk(statement.orelse)):
                 return True
-            if isinstance(statement, ForStmt) and walk(statement.body):
+            if isinstance(statement, ForStmt) and (walk(statement.body) or walk(statement.orelse)):
                 return True
             if isinstance(statement, TryStmt) and (walk(statement.body) or any(walk(handler.body) for handler in statement.handlers)):
                 return True
@@ -104,10 +104,10 @@ def _program_uses_nested_functions(program: Program) -> bool:
                 if walk(statement.body, in_function) or walk(statement.orelse, in_function):
                     return True
             elif isinstance(statement, WhileStmt):
-                if walk(statement.body, in_function):
+                if walk(statement.body, in_function) or walk(statement.orelse, in_function):
                     return True
             elif isinstance(statement, ForStmt):
-                if walk(statement.body, in_function):
+                if walk(statement.body, in_function) or walk(statement.orelse, in_function):
                     return True
             elif isinstance(statement, TryStmt):
                 if walk(statement.body, in_function):
@@ -128,9 +128,9 @@ def _program_uses_exceptions(program: Program) -> bool:
                 return True
             if isinstance(statement, IfStmt) and (walk(statement.body) or walk(statement.orelse)):
                 return True
-            if isinstance(statement, WhileStmt) and walk(statement.body):
+            if isinstance(statement, WhileStmt) and (walk(statement.body) or walk(statement.orelse)):
                 return True
-            if isinstance(statement, ForStmt) and walk(statement.body):
+            if isinstance(statement, ForStmt) and (walk(statement.body) or walk(statement.orelse)):
                 return True
         return False
 
@@ -182,10 +182,10 @@ def _program_uses_container_features(program: Program) -> bool:
                 if _expr_uses_container_features(statement.condition) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, WhileStmt):
-                if _expr_uses_container_features(statement.condition) or walk(statement.body):
+                if _expr_uses_container_features(statement.condition) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, ForStmt):
-                if _expr_uses_container_features(statement.iterator) or walk(statement.body):
+                if _expr_uses_container_features(statement.iterator) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, TryStmt):
                 if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers):
@@ -235,10 +235,10 @@ def _program_uses_object_features(program: Program) -> bool:
                 if _expr_uses_object_features(statement.condition) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, WhileStmt):
-                if _expr_uses_object_features(statement.condition) or walk(statement.body):
+                if _expr_uses_object_features(statement.condition) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, ForStmt):
-                if _expr_uses_object_features(statement.iterator) or walk(statement.body):
+                if _expr_uses_object_features(statement.iterator) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, TryStmt):
                 if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers):
@@ -259,7 +259,7 @@ def _program_uses_object_features(program: Program) -> bool:
 
 
 VM_ONLY_BUILTIN_CALLS = {
-    "str", "repr", "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
+    "repr", "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
     "frozenset", "complex", "type", "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
     "callable", "id", "enumerate", "zip", "map", "filter", "reversed", "sorted", "iter", "next", "abs",
     "round", "min", "max", "sum", "pow", "divmod", "hash", "hex", "oct", "bin", "chr", "ord", "format",
@@ -307,10 +307,10 @@ def _program_uses_vm_only_builtin_calls(program: Program) -> bool:
                 if _expr_uses_vm_only_builtin_calls(statement.condition) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, WhileStmt):
-                if _expr_uses_vm_only_builtin_calls(statement.condition) or walk(statement.body):
+                if _expr_uses_vm_only_builtin_calls(statement.condition) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, ForStmt):
-                if _expr_uses_vm_only_builtin_calls(statement.iterator) or walk(statement.body):
+                if _expr_uses_vm_only_builtin_calls(statement.iterator) or walk(statement.body) or walk(statement.orelse):
                     return True
             elif isinstance(statement, TryStmt):
                 if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers) or walk(statement.finalbody):
@@ -529,10 +529,6 @@ def compile_source(
         result.errors.error("Codegen", "native compilation does not support exceptions yet")
         result.success = False
         return result
-    if _program_uses_for_loops(result.program):
-        result.errors.error("Codegen", "native compilation does not support for loops yet")
-        result.success = False
-        return result
     if _program_uses_container_features(result.program):
         result.errors.error("Codegen", "native compilation does not support lists, tuples, indexing, or len() yet")
         result.success = False
@@ -543,10 +539,6 @@ def compile_source(
         return result
     if _program_uses_vm_only_builtin_calls(result.program):
         result.errors.error("Codegen", "native compilation does not support these builtin calls yet")
-        result.success = False
-        return result
-    if _program_uses_vm_only_print_or_string_features(result.program, result.semantic):
-        result.errors.error("Codegen", "native compilation does not support multi-argument print, custom print sep/end, or string concatenation yet")
         result.success = False
         return result
 

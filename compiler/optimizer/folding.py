@@ -11,6 +11,7 @@ from compiler.core.ast import (
     ExprStmt,
     ClassDef,
     FunctionDef,
+    ForStmt,
     IfStmt,
     IndexExpr,
     DictExpr,
@@ -60,6 +61,11 @@ class ConstantFolder:
         elif isinstance(statement, WhileStmt):
             statement.condition = self._optimize_expr(statement.condition)
             statement.body = self._optimize_statements(statement.body)
+            statement.orelse = self._optimize_statements(statement.orelse)
+        elif isinstance(statement, ForStmt):
+            statement.iterator = self._optimize_expr(statement.iterator)
+            statement.body = self._optimize_statements(statement.body)
+            statement.orelse = self._optimize_statements(statement.orelse)
         elif isinstance(statement, FunctionDef):
             statement.body = self._optimize_statements(statement.body)
         elif isinstance(statement, ClassDef):

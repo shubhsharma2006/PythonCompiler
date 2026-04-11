@@ -283,9 +283,12 @@ class BytecodeInterpreter:
             )
             return
         if op == "MAKE_FUNCTION":
-            function = self._lookup_function(frame.module, arg)
+            function_key, n_defaults = arg
+            function = self._lookup_function(frame.module, function_key)
+            defaults = [frame.stack.pop() for _ in range(n_defaults)]
+            defaults.reverse()
             captured_scopes = [frame.locals, *frame.closure_scopes]
-            frame.stack.append(Closure(function=function, closure_scopes=captured_scopes))
+            frame.stack.append(Closure(function=function, closure_scopes=captured_scopes, defaults=defaults))
             return
         if op == "IMPORT_MODULE":
             frame.stack.append(self._import_module(arg, frame.module.filename))

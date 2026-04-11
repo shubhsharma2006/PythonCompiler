@@ -51,6 +51,7 @@ class FunctionDef(Statement):
     name: str
     params: list[str]
     body: list[Statement]
+    defaults: list[Expression] = field(default_factory=list)
 
 
 @dataclass
@@ -95,6 +96,7 @@ class IfStmt(Statement):
 class WhileStmt(Statement):
     condition: Expression
     body: list[Statement]
+    orelse: list[Statement] = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +104,17 @@ class ForStmt(Statement):
     target: str
     iterator: Expression
     body: list[Statement]
+    orelse: list[Statement] = field(default_factory=list)
+
+
+@dataclass
+class BreakStmt(Statement):
+    pass
+
+
+@dataclass
+class ContinueStmt(Statement):
+    pass
 
 
 @dataclass
@@ -169,6 +182,7 @@ class BoolOpExpr(Expression):
 class CallExpr(Expression):
     func_name: str
     args: list[Expression]
+    kwargs: dict[str, Expression] = field(default_factory=dict)
 
 
 @dataclass
@@ -209,3 +223,4 @@ class MethodCallExpr(Expression):
     object: Expression
     method_name: str
     args: list[Expression]
+    kwargs: dict[str, Expression] = field(default_factory=dict)

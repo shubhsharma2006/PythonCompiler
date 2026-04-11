@@ -34,6 +34,8 @@ from compiler.core.ast import (
     TupleExpr,
     UnaryExpr,
     WhileStmt,
+    BreakStmt,
+    ContinueStmt,
 )
 from compiler.frontend.cst import ParsedModule
 from compiler.utils.error_handler import ErrorHandler
@@ -119,12 +121,10 @@ class PythonSubsetLowerer:
             if condition is None:
                 return None
             body = self._lower_body(node.body, allow_docstring=True) or []
-            return WhileStmt(span=self._span(node), condition=condition, body=body)
+            orelse = self._lower_body(node.orelse, allow_docstring=True) or []
+            return WhileStmt(span=self._span(node), condition=condition, body=body, orelse=orelse)
 
         if isinstance(node, ast.For):
-            if node.orelse:
-                self._unsupported(node, "for/else is not supported yet")
-                return None
             if not isinstance(node.target, ast.Name):
                 self._unsupported(node, "only simple name loop targets are supported")
                 return None
@@ -132,7 +132,8 @@ class PythonSubsetLowerer:
             if iterator is None:
                 return None
             body = self._lower_body(node.body, allow_docstring=True) or []
-            return ForStmt(span=self._span(node), target=node.target.id, iterator=iterator, body=body)
+            orelse = self._lower_body(node.orelse, allow_docstring=True) or []
+            return ForStmt(span=self._span(node), target=node.target.id, iterator=iterator, body=body, orelse=orelse)
 
         if isinstance(node, ast.FunctionDef):
             if node.decorator_list:
@@ -147,8 +148,8 @@ class PythonSubsetLowerer:
             if any(arg.annotation is not None for arg in node.args.args):
                 self._unsupported(node, "parameter annotations are not supported")
                 return None
-            if node.args.defaults:
-                self._unsupported(node, "default parameter values are not supported")
+            defaults = [self._lower_expr(default) for default in node.args.defaults]
+            if any(default is None for default in defaults):
                 return None
             self._function_depth += 1
             body = self._lower_body(node.body, allow_docstring=True) or []
@@ -158,6 +159,7 @@ class PythonSubsetLowerer:
                 name=node.name,
                 params=[arg.arg for arg in node.args.args],
                 body=body,
+                defaults=defaults,
             )
 
         if isinstance(node, ast.ClassDef):
@@ -250,6 +252,12 @@ class PythonSubsetLowerer:
             body = self._lower_body(node.body, allow_docstring=True) or []
             finalbody = self._lower_body(node.finalbody, allow_docstring=True) or []
             return TryStmt(span=self._span(node), body=body, handlers=handlers, finalbody=finalbody)
+
+        if isinstance(node, ast.Break):
+            return BreakStmt(span=self._span(node))
+
+        if isinstance(node, ast.Continue):
+            return ContinueStmt(span=self._span(node))
 
         self._unsupported(node, f"{type(node).__name__} is not supported")
         return None
@@ -346,19 +354,25 @@ class PythonSubsetLowerer:
             return CompareExpr(span=self._span(node), op=operator, left=left, right=right)
 
         if isinstance(node, ast.Call):
-            if node.keywords:
-                self._unsupported(node, "keyword arguments are not supported")
-                return None
             args = [self._lower_expr(arg) for arg in node.args]
             if any(arg is None for arg in args):
                 return None
+            kwargs = {}
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    self._unsupported(node, "**kwargs unpacking in calls is not supported yet")
+                    return None
+                lowered_value = self._lower_expr(keyword.value)
+                if lowered_value is None:
+                    return None
+                kwargs[keyword.arg] = lowered_value
             if isinstance(node.func, ast.Name):
-                return CallExpr(span=self._span(node), func_name=node.func.id, args=args)
+                return CallExpr(span=self._span(node), func_name=node.func.id, args=args, kwargs=kwargs)
             if isinstance(node.func, ast.Attribute):
                 obj = self._lower_expr(node.func.value)
                 if obj is None:
                     return None
-                return MethodCallExpr(span=self._span(node), object=obj, method_name=node.func.attr, args=args)
+                return MethodCallExpr(span=self._span(node), object=obj, method_name=node.func.attr, args=args, kwargs=kwargs)
             self._unsupported(node, "only direct function calls and attribute method calls are supported")
             return None
 

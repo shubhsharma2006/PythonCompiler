@@ -52,6 +52,7 @@ class Call(IRInstruction):
 class Print(IRInstruction):
     value: str
     value_type: ValueType
+    newline: bool = True
 
 
 @dataclass
