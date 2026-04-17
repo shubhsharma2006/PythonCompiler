@@ -38,6 +38,15 @@ class FrontendTests(unittest.TestCase):
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())
 
+    def test_lowers_default_arguments_and_keyword_calls(self):
+        _, _, program, errors = self.frontend(
+            "def greet(name, greeting=\"Hello\"):\n"
+            "    return greeting + \", \" + name\n\n"
+            "print(greet(name=\"Ada\"))\n"
+        )
+        self.assertIsNotNone(program)
+        self.assertFalse(errors.has_errors(), errors.render())
+
     def test_lowers_f_string(self):
         _, _, program, errors = self.frontend('name = "Ada"\nprint(f"Hello {name}")\n')
         self.assertIsNotNone(program)
@@ -115,6 +124,27 @@ class FrontendTests(unittest.TestCase):
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())
         self.assertEqual(len(program.body), 3)
+
+    def test_lowers_core_vm_gap_nodes(self):
+        _, _, program, errors = self.frontend(
+            "items = [1, 2, 3]\n"
+            "a, b = items[:2]\n"
+            "pass\n"
+            "del items[0]\n"
+            "x = 1\n"
+            "def update():\n"
+            "    global x\n"
+            "    x = x + 1\n"
+            "def outer():\n"
+            "    y = 1\n"
+            "    def inner():\n"
+            "        nonlocal y\n"
+            "        y = y + 1\n"
+            "        return y\n"
+            "    return inner()\n"
+        )
+        self.assertIsNotNone(program)
+        self.assertFalse(errors.has_errors(), errors.render())
 
     def test_lowers_class_methods_and_attributes(self):
         _, _, program, errors = self.frontend(

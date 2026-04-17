@@ -12,12 +12,14 @@ from compiler.core.ast import (
     ClassDef,
     CompareExpr,
     ConstantExpr,
+    DeleteStmt,
     DictExpr,
     ExceptHandler,
     ExprStmt,
     ForStmt,
     FromImportStmt,
     FunctionDef,
+    GlobalStmt,
     IfStmt,
     IfExpr,
     ImportStmt,
@@ -26,15 +28,19 @@ from compiler.core.ast import (
     ListExpr,
     MethodCallExpr,
     NameExpr,
+    NonlocalStmt,
+    PassStmt,
     PrintStmt,
     Program,
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SliceExpr,
     SourceSpan,
     TryStmt,
     TupleExpr,
     UnaryExpr,
+    UnpackAssignStmt,
     WhileStmt,
     BreakStmt,
     ContinueStmt,
@@ -83,6 +89,18 @@ class PythonSubsetLowerer:
                 if obj is None:
                     return None
                 return AttributeAssignStmt(span=self._span(node), object=obj, attr_name=target.attr, value=value)
+            if isinstance(target, (ast.Tuple, ast.List)):
+                if any(isinstance(element, ast.Starred) for element in target.elts):
+                    self._unsupported(node, "starred assignment is not supported yet")
+                    return None
+                if not all(isinstance(element, ast.Name) for element in target.elts):
+                    self._unsupported(node, "only simple names in unpacking assignment are supported")
+                    return None
+                return UnpackAssignStmt(
+                    span=self._span(node),
+                    targets=[element.id for element in target.elts],
+                    value=value,
+                )
             self._unsupported(node, "only simple name or attribute assignment is supported")
             return None
 
@@ -110,6 +128,24 @@ class PythonSubsetLowerer:
             if expr is None:
                 return None
             return ExprStmt(span=self._span(node), expr=expr)
+
+        if isinstance(node, ast.Pass):
+            return PassStmt(span=self._span(node))
+
+        if isinstance(node, ast.Delete):
+            targets = []
+            for target in node.targets:
+                lowered = self._lower_delete_target(target)
+                if lowered is None:
+                    return None
+                targets.append(lowered)
+            return DeleteStmt(span=self._span(node), targets=targets)
+
+        if isinstance(node, ast.Global):
+            return GlobalStmt(span=self._span(node), names=list(node.names))
+
+        if isinstance(node, ast.Nonlocal):
+            return NonlocalStmt(span=self._span(node), names=list(node.names))
 
         if isinstance(node, ast.If):
             condition = self._lower_expr(node.test)
@@ -431,11 +467,11 @@ class PythonSubsetLowerer:
             return SetExpr(span=self._span(node), elements=elements)
 
         if isinstance(node, ast.Subscript):
-            if isinstance(node.slice, ast.Slice):
-                self._unsupported(node, "slices are not supported yet")
-                return None
             collection = self._lower_expr(node.value)
-            index = self._lower_expr(node.slice)
+            if isinstance(node.slice, ast.Slice):
+                index = self._lower_slice(node.slice)
+            else:
+                index = self._lower_expr(node.slice)
             if collection is None or index is None:
                 return None
             return IndexExpr(span=self._span(node), collection=collection, index=index)
@@ -475,6 +511,33 @@ class PythonSubsetLowerer:
             return LambdaExpr(span=self._span(node), func_def=func_def)
 
         self._unsupported(node, f"expression {type(node).__name__} is not supported")
+        return None
+
+    def _lower_slice(self, node: ast.Slice) -> SliceExpr | None:
+        lower = self._lower_expr(node.lower) if node.lower is not None else None
+        upper = self._lower_expr(node.upper) if node.upper is not None else None
+        step = self._lower_expr(node.step) if node.step is not None else None
+        if (
+            (node.lower is not None and lower is None)
+            or (node.upper is not None and upper is None)
+            or (node.step is not None and step is None)
+        ):
+            return None
+        return SliceExpr(span=self._span(node), lower=lower, upper=upper, step=step)
+
+    def _lower_delete_target(self, node: ast.expr):
+        if isinstance(node, ast.Name):
+            return NameExpr(span=self._span(node), name=node.id)
+        if isinstance(node, ast.Subscript):
+            collection = self._lower_expr(node.value)
+            if isinstance(node.slice, ast.Slice):
+                index = self._lower_slice(node.slice)
+            else:
+                index = self._lower_expr(node.slice)
+            if collection is None or index is None:
+                return None
+            return IndexExpr(span=self._span(node), collection=collection, index=index)
+        self._unsupported(node, "only name and subscript delete targets are supported")
         return None
 
     @staticmethod

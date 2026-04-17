@@ -12,11 +12,13 @@ from compiler.core.ast import (
     CompareExpr,
     ConstantExpr,
     ContinueStmt,
+    DeleteStmt,
     DictExpr,
     ExprStmt,
     ForStmt,
     FromImportStmt,
     FunctionDef,
+    GlobalStmt,
     IfStmt,
     IfExpr,
     ImportStmt,
@@ -25,14 +27,18 @@ from compiler.core.ast import (
     ListExpr,
     MethodCallExpr,
     NameExpr,
+    NonlocalStmt,
+    PassStmt,
     PrintStmt,
     Program,
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SliceExpr,
     TryStmt,
     TupleExpr,
     UnaryExpr,
+    UnpackAssignStmt,
     WhileStmt,
     BreakStmt,
     ContinueStmt,
@@ -46,6 +52,7 @@ class BytecodeLowerer:
         self.function_counter = 0
         self.functions: dict[str, BytecodeFunction] = {}
         self.loop_stack: list[tuple[str, str]] = []
+        self.scope_stack: list[tuple[set[str], set[str]]] = []
 
     def lower(self, program: Program, *, module_name: str = "__main__", filename: str = "<stdin>") -> BytecodeModule:
         self.functions = {}
@@ -75,11 +82,23 @@ class BytecodeLowerer:
 
     def _lower_body(self, name: str, params: list[str], body: list[object], parent_key: str | None = None) -> BytecodeFunction:
         instructions: list[Instruction] = []
-        for statement in body:
-            self._emit_statement(statement, instructions, parent_key or name)
+        global_names, nonlocal_names = self._collect_scope_declarations(body)
+        self.scope_stack.append((global_names, nonlocal_names))
+        try:
+            for statement in body:
+                self._emit_statement(statement, instructions, parent_key or name)
+        finally:
+            self.scope_stack.pop()
         instructions.append(Instruction("LOAD_CONST", None))
         instructions.append(Instruction("RETURN_VALUE"))
-        return BytecodeFunction(key="", name=name, params=list(params), instructions=self._resolve_labels(instructions))
+        return BytecodeFunction(
+            key="",
+            name=name,
+            params=list(params),
+            instructions=self._resolve_labels(instructions),
+            global_names=global_names,
+            nonlocal_names=nonlocal_names,
+        )
 
     def _emit_statement(self, statement, instructions: list[Instruction], parent_key: str) -> None:
         if isinstance(statement, FunctionDef):
@@ -87,7 +106,7 @@ class BytecodeLowerer:
             for default in statement.defaults:
                 self._emit_expr(default, instructions)
             instructions.append(Instruction("MAKE_FUNCTION", (lowered.key, len(statement.defaults))))
-            instructions.append(Instruction("STORE_NAME", statement.name))
+            self._emit_store_name(statement.name, instructions)
             return
 
         if isinstance(statement, ClassDef):
@@ -97,18 +116,41 @@ class BytecodeLowerer:
                 lowered = self._lower_function(method, parent_key=class_parent)
                 method_specs.append((method.name, lowered.key))
             instructions.append(Instruction("BUILD_CLASS", (statement.name, method_specs)))
-            instructions.append(Instruction("STORE_NAME", statement.name))
+            self._emit_store_name(statement.name, instructions)
             return
 
         if isinstance(statement, AssignStmt):
             self._emit_expr(statement.value, instructions)
-            instructions.append(Instruction("STORE_NAME", statement.name))
+            self._emit_store_name(statement.name, instructions)
+            return
+
+        if isinstance(statement, UnpackAssignStmt):
+            self._emit_expr(statement.value, instructions, parent_key)
+            instructions.append(Instruction("UNPACK_SEQUENCE", len(statement.targets)))
+            for target in statement.targets:
+                self._emit_store_name(target, instructions)
             return
 
         if isinstance(statement, AttributeAssignStmt):
             self._emit_expr(statement.object, instructions)
             self._emit_expr(statement.value, instructions)
             instructions.append(Instruction("STORE_ATTR", statement.attr_name))
+            return
+
+        if isinstance(statement, PassStmt):
+            return
+
+        if isinstance(statement, (GlobalStmt, NonlocalStmt)):
+            return
+
+        if isinstance(statement, DeleteStmt):
+            for target in statement.targets:
+                if isinstance(target, NameExpr):
+                    instructions.append(Instruction("DELETE_NAME", target.name))
+                elif isinstance(target, IndexExpr):
+                    self._emit_expr(target.collection, instructions, parent_key)
+                    self._emit_expr(target.index, instructions, parent_key)
+                    instructions.append(Instruction("DELETE_SUBSCR"))
             return
 
         if isinstance(statement, PrintStmt):
@@ -164,12 +206,12 @@ class BytecodeLowerer:
 
         if isinstance(statement, ImportStmt):
             instructions.append(Instruction("IMPORT_MODULE", statement.module))
-            instructions.append(Instruction("STORE_NAME", statement.alias or statement.module))
+            self._emit_store_name(statement.alias or statement.module, instructions)
             return
 
         if isinstance(statement, FromImportStmt):
             instructions.append(Instruction("IMPORT_FROM", (statement.module, statement.name)))
-            instructions.append(Instruction("STORE_NAME", statement.alias or statement.name))
+            self._emit_store_name(statement.alias or statement.name, instructions)
             return
 
         if isinstance(statement, ExprStmt):
@@ -232,7 +274,7 @@ class BytecodeLowerer:
             instructions.append(Instruction("GET_ITER"))
             instructions.append(Instruction("LABEL", start_label))
             instructions.append(Instruction("FOR_ITER", false_target))
-            instructions.append(Instruction("STORE_NAME", statement.target))
+            self._emit_store_name(statement.target, instructions)
             self.loop_stack.append((start_label, break_target))
             for child in statement.body:
                 self._emit_statement(child, instructions, parent_key)
@@ -287,7 +329,7 @@ class BytecodeLowerer:
             return
 
         if isinstance(expr, NameExpr):
-            instructions.append(Instruction("LOAD_NAME", expr.name))
+            self._emit_load_name(expr.name, instructions)
             return
 
         if isinstance(expr, BinaryExpr):
@@ -364,6 +406,22 @@ class BytecodeLowerer:
             instructions.append(Instruction("BUILD_SET", len(expr.elements)))
             return
 
+        if isinstance(expr, SliceExpr):
+            if expr.lower is None:
+                instructions.append(Instruction("LOAD_CONST", None))
+            else:
+                self._emit_expr(expr.lower, instructions, parent_key)
+            if expr.upper is None:
+                instructions.append(Instruction("LOAD_CONST", None))
+            else:
+                self._emit_expr(expr.upper, instructions, parent_key)
+            if expr.step is None:
+                instructions.append(Instruction("BUILD_SLICE", 2))
+            else:
+                self._emit_expr(expr.step, instructions, parent_key)
+                instructions.append(Instruction("BUILD_SLICE", 3))
+            return
+
         if isinstance(expr, IndexExpr):
             self._emit_expr(expr.collection, instructions, parent_key)
             self._emit_expr(expr.index, instructions, parent_key)
@@ -388,6 +446,41 @@ class BytecodeLowerer:
             return
 
         instructions.append(Instruction("LOAD_CONST", None))
+
+    @staticmethod
+    def _collect_scope_declarations(body: list[object]) -> tuple[set[str], set[str]]:
+        global_names: set[str] = set()
+        nonlocal_names: set[str] = set()
+        for statement in body:
+            if isinstance(statement, GlobalStmt):
+                global_names.update(statement.names)
+            elif isinstance(statement, NonlocalStmt):
+                nonlocal_names.update(statement.names)
+        return global_names, nonlocal_names
+
+    def _emit_load_name(self, name: str, instructions: list[Instruction]) -> None:
+        if self._declares_global(name):
+            instructions.append(Instruction("LOAD_GLOBAL", name))
+            return
+        if self._declares_nonlocal(name):
+            instructions.append(Instruction("LOAD_DEREF", name))
+            return
+        instructions.append(Instruction("LOAD_NAME", name))
+
+    def _emit_store_name(self, name: str, instructions: list[Instruction]) -> None:
+        if self._declares_global(name):
+            instructions.append(Instruction("STORE_GLOBAL", name))
+            return
+        if self._declares_nonlocal(name):
+            instructions.append(Instruction("STORE_DEREF", name))
+            return
+        instructions.append(Instruction("STORE_NAME", name))
+
+    def _declares_global(self, name: str) -> bool:
+        return bool(self.scope_stack and name in self.scope_stack[-1][0])
+
+    def _declares_nonlocal(self, name: str) -> bool:
+        return bool(self.scope_stack and name in self.scope_stack[-1][1])
 
     def _literal_default(self, expr):
         if isinstance(expr, ConstantExpr):

@@ -135,6 +135,21 @@ SOURCE_TESTS = [
         "expected": ["3", "20", "4", "e"],
     },
     {
+        "name": "Slicing",
+        "source": """items = [0, 1, 2, 3, 4]\nword = "hello"\nprint(items[1:3])\nprint(items[:2])\nprint(items[::2])\nprint(items[::-1])\nprint(word[1:4])\n""",
+        "expected": ["[1, 2]", "[0, 1]", "[0, 2, 4]", "[4, 3, 2, 1, 0]", "ell"],
+    },
+    {
+        "name": "Unpack assignment",
+        "source": """a, b = (1, 2)\nc, d = [3, 4]\nprint(a)\nprint(b)\nprint(c + d)\n""",
+        "expected": ["1", "2", "7"],
+    },
+    {
+        "name": "Pass delete global and nonlocal",
+        "source": """items = [1, 2, 3]\nif True:\n    pass\nfor _ in range(1):\n    pass\ndef noop():\n    pass\nclass Box:\n    def touch(self):\n        pass\nnoop()\nBox().touch()\ndel items[0]\nd = {"x": 1, "y": 2}\ndel d["x"]\nx = 1\ndef update():\n    global x\n    x = x + 1\ndef outer():\n    y = 10\n    def inner():\n        nonlocal y\n        y = y + 5\n        return y\n    return inner()\nupdate()\nprint(items[0])\nprint(len(d))\nprint(x)\nprint(outer())\n""",
+        "expected": ["2", "1", "2", "15"],
+    },
+    {
         "name": "Dicts sets and container methods",
         "source": """d = {"a": 1, "b": 2}\nprint(d["a"])\nprint(len(d))\nprint(d.get("b"))\ns = {1, 2}\ns.add(3)\nprint(3 in s)\n""",
         "expected": ["1", "2", "2", "True"],
@@ -158,6 +173,16 @@ SOURCE_TESTS = [
         "name": "Multi argument print",
         "source": """print("hello", "world", sep=", ", end="!")\n""",
         "expected": ["hello, world!"],
+    },
+    {
+        "name": "Default arguments",
+        "source": """def greet(name, greeting="Hello"):\n    return greeting + ", " + name\n\nprint(greet("Ada"))\nprint(greet("Bob", "Hi"))\n""",
+        "expected": ["Hello, Ada", "Hi, Bob"],
+    },
+    {
+        "name": "Keyword arguments",
+        "source": """def combine(a, b, c=3):\n    return a + b + c\n\nprint(combine(1, c=5, b=2))\n""",
+        "expected": ["8"],
     },
     {
         "name": "F strings",
@@ -216,7 +241,12 @@ NEGATIVE_TESTS = [
     {
         "name": "Reject wrong argument count",
         "source": "def add(a, b):\n    return a + b\n\nprint(add(1))\n",
-        "expected_substring": "expects 2 arguments, got 1",
+        "expected_substring": "missing required argument 'b'",
+    },
+    {
+        "name": "Reject duplicate keyword argument",
+        "source": "def add(a, b=1):\n    return a + b\n\nprint(add(1, a=2))\n",
+        "expected_substring": "got multiple values for argument 'a'",
     },
     {
         "name": "Reject unhandled exceptions",
@@ -227,6 +257,26 @@ NEGATIVE_TESTS = [
         "name": "Reject unsupported print keyword",
         "source": 'print("x", flush=True)\n',
         "expected_substring": "print() keyword 'flush' is not supported yet",
+    },
+    {
+        "name": "Reject unpack count mismatch",
+        "source": "a, b = (1, 2, 3)\n",
+        "expected_substring": "unpack expected 2 values, got 3",
+    },
+    {
+        "name": "Reject starred unpacking",
+        "source": "a, *rest = [1, 2, 3]\n",
+        "expected_substring": "starred assignment is not supported yet",
+    },
+    {
+        "name": "Reject invalid nonlocal",
+        "source": "def outer():\n    def inner():\n        nonlocal missing\n        missing = 1\n    return inner()\nprint(outer())\n",
+        "expected_substring": "no binding for nonlocal 'missing' found",
+    },
+    {
+        "name": "Reject unsupported delete target",
+        "source": "class Box:\n    pass\nbox = Box()\nbox.value = 1\ndel box.value\n",
+        "expected_substring": "only name and subscript delete targets are supported",
     },
 ]
 

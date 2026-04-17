@@ -74,6 +74,32 @@ class AttributeAssignStmt(Statement):
 
 
 @dataclass
+class UnpackAssignStmt(Statement):
+    targets: list[str]
+    value: Expression
+
+
+@dataclass
+class PassStmt(Statement):
+    pass
+
+
+@dataclass
+class DeleteStmt(Statement):
+    targets: list[Expression]
+
+
+@dataclass
+class GlobalStmt(Statement):
+    names: list[str]
+
+
+@dataclass
+class NonlocalStmt(Statement):
+    names: list[str]
+
+
+@dataclass
 class PrintStmt(Statement):
     values: list[Expression]
     sep: Expression | None = None
@@ -222,6 +248,13 @@ class SetExpr(Expression):
 class IndexExpr(Expression):
     collection: Expression
     index: Expression
+
+
+@dataclass
+class SliceExpr(Expression):
+    lower: Expression | None
+    upper: Expression | None
+    step: Expression | None
 
 
 @dataclass

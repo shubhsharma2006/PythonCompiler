@@ -19,6 +19,8 @@ class BytecodeFunction:
     params: list[str]
     instructions: list[Instruction] = field(default_factory=list)
     defaults: list[object] = field(default_factory=list)
+    global_names: set[str] = field(default_factory=set)
+    nonlocal_names: set[str] = field(default_factory=set)
 
     def __str__(self) -> str:
         lines = [f"function {self.name} [{self.key}] ({', '.join(self.params)})"]

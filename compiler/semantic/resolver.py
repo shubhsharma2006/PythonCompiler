@@ -10,12 +10,14 @@ from compiler.core.ast import (
     ClassDef,
     CompareExpr,
     ConstantExpr,
+    DeleteStmt,
     DictExpr,
     ExceptHandler,
     ExprStmt,
     ForStmt,
     FromImportStmt,
     FunctionDef,
+    GlobalStmt,
     IfStmt,
     IfExpr,
     IndexExpr,
@@ -24,14 +26,18 @@ from compiler.core.ast import (
     ListExpr,
     MethodCallExpr,
     NameExpr,
+    NonlocalStmt,
+    PassStmt,
     PrintStmt,
     Program,
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SliceExpr,
     TryStmt,
     TupleExpr,
     UnaryExpr,
+    UnpackAssignStmt,
     WhileStmt,
 )
 from compiler.core.types import FunctionType, ValueType
@@ -67,6 +73,8 @@ class NameResolver:
 
         for statement in program.body:
             if isinstance(statement, FunctionDef):
+                for default in statement.defaults:
+                    self._resolve_expr(default, table.global_scope)
                 continue
             self._resolve_statement(statement, table.global_scope)
 
@@ -103,7 +111,13 @@ class NameResolver:
                 self._error(statement, f"cannot assign to function name {statement.name!r}")
                 return
             self._resolve_expr(statement.value, scope)
-            scope.define(statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.name, ValueType.UNKNOWN)
+            return
+
+        if isinstance(statement, UnpackAssignStmt):
+            self._resolve_expr(statement.value, scope)
+            for target in statement.targets:
+                self._define_name(scope, target, ValueType.UNKNOWN)
             return
 
         if isinstance(statement, AttributeAssignStmt):
@@ -111,12 +125,36 @@ class NameResolver:
             self._resolve_expr(statement.value, scope)
             return
 
+        if isinstance(statement, PassStmt):
+            return
+
+        if isinstance(statement, GlobalStmt):
+            for name in statement.names:
+                scope.declare_global(name)
+            return
+
+        if isinstance(statement, NonlocalStmt):
+            if self.current_function is None:
+                self._error(statement, "nonlocal is only valid inside a function")
+                return
+            for name in statement.names:
+                if scope.lookup_enclosing(name) is None:
+                    self._error(statement, f"no binding for nonlocal {name!r} found")
+                    continue
+                scope.declare_nonlocal(name)
+            return
+
+        if isinstance(statement, DeleteStmt):
+            for target in statement.targets:
+                self._resolve_delete_target(target, scope)
+            return
+
         if isinstance(statement, ImportStmt):
-            scope.define(statement.alias or statement.module, ValueType.UNKNOWN)
+            self._define_name(scope, statement.alias or statement.module, ValueType.UNKNOWN)
             return
 
         if isinstance(statement, FromImportStmt):
-            scope.define(statement.alias or statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.alias or statement.name, ValueType.UNKNOWN)
             return
 
         if isinstance(statement, PrintStmt):
@@ -152,7 +190,7 @@ class NameResolver:
 
         if isinstance(statement, ForStmt):
             self._resolve_expr(statement.iterator, scope)
-            scope.define(statement.target, ValueType.UNKNOWN)
+            self._define_name(scope, statement.target, ValueType.UNKNOWN)
             for child in statement.body:
                 self._resolve_statement(child, scope)
             for child in statement.orelse:
@@ -169,27 +207,33 @@ class NameResolver:
             return
 
         if isinstance(statement, FunctionDef):
+            for default in statement.defaults:
+                self._resolve_expr(default, scope)
             local_function = FunctionType(
                 name=statement.name,
                 param_names=statement.params,
                 param_types=[ValueType.UNKNOWN for _ in statement.params],
+                defaults_count=len(statement.defaults),
                 node=statement,
             )
-            scope.define(statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.name, ValueType.UNKNOWN)
             if self.local_functions:
                 self.local_functions[-1][statement.name] = local_function
             self._resolve_local_function(statement, scope, local_function)
             return
 
         if isinstance(statement, ClassDef):
-            scope.define(statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.name, ValueType.UNKNOWN)
             for method in statement.methods:
                 method_function = FunctionType(
                     name=f"{statement.name}.{method.name}",
                     param_names=method.params,
                     param_types=[ValueType.UNKNOWN for _ in method.params],
+                    defaults_count=len(method.defaults),
                     node=method,
                 )
+                for default in method.defaults:
+                    self._resolve_expr(default, scope)
                 self._resolve_local_function(method, scope, method_function)
             return
 
@@ -244,6 +288,8 @@ class NameResolver:
             if self._is_builtin_function(expr.func_name):
                 for arg in expr.args:
                     self._resolve_expr(arg, scope)
+                for arg in expr.kwargs.values():
+                    self._resolve_expr(arg, scope)
                 return
             function = self.table.functions.get(expr.func_name)
             local_function = self._lookup_local_function(expr.func_name)
@@ -252,13 +298,16 @@ class NameResolver:
                 if scope.lookup(expr.func_name) is not None:
                     for arg in expr.args:
                         self._resolve_expr(arg, scope)
+                    for arg in expr.kwargs.values():
+                        self._resolve_expr(arg, scope)
                     return
                 self._error(expr, f"undefined function {expr.func_name!r}")
                 return
-            if len(expr.args) != len(target.param_names):
-                self._error(expr, f"function {expr.func_name!r} expects {len(target.param_names)} arguments, got {len(expr.args)}")
+            self._validate_call_shape(expr, target)
             target.reachable = True
             for arg in expr.args:
+                self._resolve_expr(arg, scope)
+            for arg in expr.kwargs.values():
                 self._resolve_expr(arg, scope)
             if function is not None:
                 self._resolve_function(function)
@@ -300,6 +349,7 @@ class NameResolver:
                     name=expr.func_def.name,
                     param_names=expr.func_def.params,
                     param_types=[ValueType.UNKNOWN for _ in expr.func_def.params],
+                    defaults_count=len(expr.func_def.defaults),
                     node=expr.func_def,
                 )
             )
@@ -310,6 +360,15 @@ class NameResolver:
             self._resolve_expr(expr.index, scope)
             return
 
+        if isinstance(expr, SliceExpr):
+            if expr.lower is not None:
+                self._resolve_expr(expr.lower, scope)
+            if expr.upper is not None:
+                self._resolve_expr(expr.upper, scope)
+            if expr.step is not None:
+                self._resolve_expr(expr.step, scope)
+            return
+
         if isinstance(expr, AttributeExpr):
             self._resolve_expr(expr.object, scope)
             return
@@ -318,6 +377,33 @@ class NameResolver:
             self._resolve_expr(expr.object, scope)
             for arg in expr.args:
                 self._resolve_expr(arg, scope)
+            for arg in expr.kwargs.values():
+                self._resolve_expr(arg, scope)
+
+    def _define_name(self, scope: Scope, name: str, value_type: ValueType) -> None:
+        if name in scope.global_names:
+            scope.root().define(name, value_type)
+            return
+        if name in scope.nonlocal_names:
+            parent = scope.parent
+            while parent is not None and parent.parent is not None:
+                if name in parent.values:
+                    parent.define(name, value_type)
+                    return
+                parent = parent.parent
+            return
+        scope.define(name, value_type)
+
+    def _resolve_delete_target(self, target, scope: Scope) -> None:
+        if isinstance(target, NameExpr):
+            if scope.lookup(target.name) is None:
+                self._error(target, f"undefined variable {target.name!r}")
+            return
+        if isinstance(target, IndexExpr):
+            self._resolve_expr(target.collection, scope)
+            self._resolve_expr(target.index, scope)
+            return
+        self._error(target, "unsupported delete target")
 
     def _error(self, node, message: str) -> None:
         self.errors.error("Semantic", message, node.span.line, node.span.column, node.span.end_line, node.span.end_column)
@@ -335,6 +421,27 @@ class NameResolver:
             self._resolve_statement(child, scope)
         self.current_function = previous
         self.local_functions.pop()
+
+    def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
+        total_params = len(function.param_names)
+        required_params = total_params - function.defaults_count
+        if len(expr.args) > total_params:
+            self._error(expr, f"function {expr.func_name!r} expects at most {total_params} arguments, got {len(expr.args)}")
+            return
+
+        provided = set(function.param_names[: len(expr.args)])
+        for name in expr.kwargs:
+            if name not in function.param_names:
+                self._error(expr, f"function {expr.func_name!r} got unexpected keyword argument {name!r}")
+                continue
+            if name in provided:
+                self._error(expr, f"function {expr.func_name!r} got multiple values for argument {name!r}")
+                continue
+            provided.add(name)
+
+        missing = [name for name in function.param_names[:required_params] if name not in provided]
+        if missing:
+            self._error(expr, f"function {expr.func_name!r} missing required argument {missing[0]!r}")
 
     def _lookup_local_function(self, name: str) -> FunctionType | None:
         for scope in reversed(self.local_functions):

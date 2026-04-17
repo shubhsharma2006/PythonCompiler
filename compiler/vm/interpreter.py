@@ -131,6 +131,20 @@ class BytecodeInterpreter:
                 frame.stack.append(self.builtins[arg])
                 return
             raise VMError(f"undefined name {arg!r}")
+        if op == "LOAD_GLOBAL":
+            if arg in frame.globals:
+                frame.stack.append(frame.globals[arg])
+                return
+            if arg in self.builtins:
+                frame.stack.append(self.builtins[arg])
+                return
+            raise VMError(f"undefined global name {arg!r}")
+        if op == "LOAD_DEREF":
+            for scope in frame.closure_scopes:
+                if arg in scope:
+                    frame.stack.append(scope[arg])
+                    return
+            raise VMError(f"free variable {arg!r} not found in closure")
         if op == "STORE_NAME":
             value = frame.stack.pop()
             if frame.is_module:
@@ -138,6 +152,24 @@ class BytecodeInterpreter:
             else:
                 frame.locals[arg] = value
             return
+        if op == "STORE_GLOBAL":
+            frame.globals[arg] = frame.stack.pop()
+            return
+        if op == "STORE_DEREF":
+            value = frame.stack.pop()
+            for scope in frame.closure_scopes:
+                if arg in scope:
+                    scope[arg] = value
+                    return
+            raise VMError(f"free variable {arg!r} not found in closure")
+        if op == "DELETE_NAME":
+            if arg in frame.locals:
+                del frame.locals[arg]
+                return
+            if arg in frame.globals:
+                del frame.globals[arg]
+                return
+            raise VMError(f"cannot delete undefined name {arg!r}")
         if op == "POP_TOP":
             if frame.stack:
                 frame.stack.pop()
@@ -169,6 +201,29 @@ class BytecodeInterpreter:
             values = [frame.stack.pop() for _ in range(count)]
             values.reverse()
             frame.stack.append(set(values))
+            return
+        if op == "BUILD_SLICE":
+            if int(arg) == 3:
+                step = frame.stack.pop()
+                stop = frame.stack.pop()
+                start = frame.stack.pop()
+                frame.stack.append(slice(start, stop, step))
+                return
+            stop = frame.stack.pop()
+            start = frame.stack.pop()
+            frame.stack.append(slice(start, stop))
+            return
+        if op == "UNPACK_SEQUENCE":
+            expected = int(arg)
+            sequence = frame.stack.pop()
+            try:
+                values = list(sequence)
+            except TypeError as exc:
+                raise VMError(str(exc)) from None
+            if len(values) != expected:
+                raise VMError(f"unpack expected {expected} values, got {len(values)}")
+            for value in reversed(values):
+                frame.stack.append(value)
             return
         if op == "BUILD_CLASS":
             class_name, method_specs = arg
@@ -216,6 +271,14 @@ class BytecodeInterpreter:
             index = frame.stack.pop()
             collection = frame.stack.pop()
             frame.stack.append(py_index_get(collection, index))
+            return
+        if op == "DELETE_SUBSCR":
+            index = frame.stack.pop()
+            collection = frame.stack.pop()
+            try:
+                del collection[index]
+            except (IndexError, KeyError, TypeError) as exc:
+                raise VMError(str(exc)) from None
             return
         if op == "LOAD_ATTR":
             obj = frame.stack.pop()

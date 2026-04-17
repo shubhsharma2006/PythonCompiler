@@ -10,12 +10,14 @@ from compiler.core.ast import (
     ClassDef,
     CompareExpr,
     ConstantExpr,
+    DeleteStmt,
     DictExpr,
     ExceptHandler,
     ExprStmt,
     ForStmt,
     FromImportStmt,
     FunctionDef,
+    GlobalStmt,
     IfStmt,
     IfExpr,
     IndexExpr,
@@ -24,14 +26,18 @@ from compiler.core.ast import (
     ListExpr,
     MethodCallExpr,
     NameExpr,
+    NonlocalStmt,
+    PassStmt,
     PrintStmt,
     Program,
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SliceExpr,
     TryStmt,
     TupleExpr,
     UnaryExpr,
+    UnpackAssignStmt,
     WhileStmt,
 )
 from compiler.core.types import FunctionType, ValueType, can_truth_test, is_numeric, merge_types
@@ -69,6 +75,8 @@ class TypeChecker:
 
         for statement in program.body:
             if isinstance(statement, FunctionDef):
+                for default in statement.defaults:
+                    self._check_expr(default, table.global_scope)
                 continue
             self._check_statement(statement, table.global_scope)
 
@@ -110,14 +118,24 @@ class TypeChecker:
     def _check_statement(self, statement, scope: Scope) -> None:
         if isinstance(statement, AssignStmt):
             value_type = self._check_expr(statement.value, scope)
-            existing = scope.lookup(statement.name) if scope is self.table.global_scope else scope.values.get(statement.name)
+            existing = self._existing_local_type(scope, statement.name)
             merged = merge_types(existing or ValueType.UNKNOWN, value_type)
             if merged is None:
                 self._error(statement, f"cannot assign {value_type.value} to {statement.name!r} previously typed as {existing.value}")
                 return
-            scope.define(statement.name, merged)
+            self._define_name(scope, statement.name, merged)
             if self.current_function is not None:
                 self.current_function.local_types[statement.name] = merged
+            return
+
+        if isinstance(statement, UnpackAssignStmt):
+            value_type = self._check_expr(statement.value, scope)
+            if value_type == ValueType.VOID:
+                self._error(statement.value, "cannot unpack a void value")
+            for target in statement.targets:
+                self._define_name(scope, target, ValueType.UNKNOWN)
+                if self.current_function is not None:
+                    self.current_function.local_types[target] = ValueType.UNKNOWN
             return
 
         if isinstance(statement, AttributeAssignStmt):
@@ -129,14 +147,38 @@ class TypeChecker:
                 self._error(statement.value, "cannot assign a void value to an attribute")
             return
 
+        if isinstance(statement, PassStmt):
+            return
+
+        if isinstance(statement, GlobalStmt):
+            for name in statement.names:
+                scope.declare_global(name)
+            return
+
+        if isinstance(statement, NonlocalStmt):
+            if self.current_function is None:
+                self._error(statement, "nonlocal is only valid inside a function")
+                return
+            for name in statement.names:
+                if scope.lookup_enclosing(name) is None:
+                    self._error(statement, f"no binding for nonlocal {name!r} found")
+                    continue
+                scope.declare_nonlocal(name)
+            return
+
+        if isinstance(statement, DeleteStmt):
+            for target in statement.targets:
+                self._check_delete_target(target, scope)
+            return
+
         if isinstance(statement, ImportStmt):
-            scope.define(statement.alias or statement.module, ValueType.UNKNOWN)
+            self._define_name(scope, statement.alias or statement.module, ValueType.UNKNOWN)
             if self.current_function is not None:
                 self.current_function.local_types[statement.alias or statement.module] = ValueType.UNKNOWN
             return
 
         if isinstance(statement, FromImportStmt):
-            scope.define(statement.alias or statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.alias or statement.name, ValueType.UNKNOWN)
             if self.current_function is not None:
                 self.current_function.local_types[statement.alias or statement.name] = ValueType.UNKNOWN
             return
@@ -182,9 +224,10 @@ class TypeChecker:
 
         if isinstance(statement, ForStmt):
             iterator_type = self._check_expr(statement.iterator, scope)
-            scope.define(statement.target, ValueType.INT if self._is_range_call(statement.iterator) else ValueType.UNKNOWN)
+            target_type = ValueType.INT if self._is_range_call(statement.iterator) else ValueType.UNKNOWN
+            self._define_name(scope, statement.target, target_type)
             if self.current_function is not None:
-                self.current_function.local_types[statement.target] = ValueType.INT if self._is_range_call(statement.iterator) else ValueType.UNKNOWN
+                self.current_function.local_types[statement.target] = target_type
             if iterator_type == ValueType.VOID:
                 self._error(statement.iterator, "for-loop iterator cannot be void")
             for child in statement.body:
@@ -203,13 +246,16 @@ class TypeChecker:
             return
 
         if isinstance(statement, FunctionDef):
+            for default in statement.defaults:
+                self._check_expr(default, scope)
             local_function = FunctionType(
                 name=statement.name,
                 param_names=statement.params,
                 param_types=[ValueType.UNKNOWN for _ in statement.params],
+                defaults_count=len(statement.defaults),
                 node=statement,
             )
-            scope.define(statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.name, ValueType.UNKNOWN)
             if self.current_function is not None:
                 self.current_function.local_types[statement.name] = ValueType.UNKNOWN
             if self.local_functions:
@@ -218,7 +264,7 @@ class TypeChecker:
             return
 
         if isinstance(statement, ClassDef):
-            scope.define(statement.name, ValueType.UNKNOWN)
+            self._define_name(scope, statement.name, ValueType.UNKNOWN)
             if self.current_function is not None:
                 self.current_function.local_types[statement.name] = ValueType.UNKNOWN
             for method in statement.methods:
@@ -226,8 +272,11 @@ class TypeChecker:
                     name=f"{statement.name}.{method.name}",
                     param_names=method.params,
                     param_types=[ValueType.UNKNOWN for _ in method.params],
+                    defaults_count=len(method.defaults),
                     node=method,
                 )
+                for default in method.defaults:
+                    self._check_expr(default, scope)
                 self._check_local_function(method, scope, method_function)
             return
 
@@ -325,8 +374,12 @@ class TypeChecker:
             if target is None:
                 for arg in expr.args:
                     self._check_expr(arg, scope)
+                for arg in expr.kwargs.values():
+                    self._check_expr(arg, scope)
                 return self._set_expr_type(expr, ValueType.UNKNOWN)
+            self._validate_call_shape(expr, target)
             arg_types = [self._check_expr(arg, scope) for arg in expr.args]
+            kwarg_types = {name: self._check_expr(arg, scope) for name, arg in expr.kwargs.items()}
             updated = False
             for index, arg_type in enumerate(arg_types):
                 if index >= len(target.param_types):
@@ -334,6 +387,17 @@ class TypeChecker:
                 merged = merge_types(target.param_types[index], arg_type)
                 if merged is None:
                     self._error(expr.args[index], f"argument {index + 1} to {expr.func_name!r} has incompatible type {arg_type.value}")
+                    continue
+                if merged != target.param_types[index]:
+                    target.param_types[index] = merged
+                    updated = True
+            for name, arg_type in kwarg_types.items():
+                if name not in target.param_names:
+                    continue
+                index = target.param_names.index(name)
+                merged = merge_types(target.param_types[index], arg_type)
+                if merged is None:
+                    self._error(expr.kwargs[name], f"argument {name!r} to {expr.func_name!r} has incompatible type {arg_type.value}")
                     continue
                 if merged != target.param_types[index]:
                     target.param_types[index] = merged
@@ -392,6 +456,7 @@ class TypeChecker:
                 name=expr.func_def.name,
                 param_names=expr.func_def.params,
                 param_types=[ValueType.UNKNOWN for _ in expr.func_def.params],
+                defaults_count=len(expr.func_def.defaults),
                 node=expr.func_def,
             )
             self._check_local_function(expr.func_def, scope, local_function)
@@ -400,6 +465,11 @@ class TypeChecker:
         if isinstance(expr, IndexExpr):
             collection_type = self._check_expr(expr.collection, scope)
             index_type = self._check_expr(expr.index, scope)
+            if isinstance(expr.index, SliceExpr):
+                if collection_type not in {ValueType.LIST, ValueType.TUPLE, ValueType.STRING, ValueType.UNKNOWN}:
+                    self._error(expr.collection, f"cannot slice value of type {collection_type.value}")
+                result_type = ValueType.STRING if collection_type == ValueType.STRING else ValueType.UNKNOWN
+                return self._set_expr_type(expr, result_type)
             if collection_type == ValueType.DICT:
                 if index_type == ValueType.VOID:
                     self._error(expr.index, "dict index cannot be void")
@@ -409,6 +479,15 @@ class TypeChecker:
                 self._error(expr.collection, f"cannot index value of type {collection_type.value}")
             result_type = ValueType.STRING if collection_type == ValueType.STRING else ValueType.UNKNOWN
             return self._set_expr_type(expr, result_type)
+
+        if isinstance(expr, SliceExpr):
+            for part_name, part in (("lower", expr.lower), ("upper", expr.upper), ("step", expr.step)):
+                if part is None:
+                    continue
+                part_type = self._check_expr(part, scope)
+                if part_type not in {ValueType.INT, ValueType.UNKNOWN}:
+                    self._error(part, f"slice {part_name} must be int, got {part_type.value}")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
 
         if isinstance(expr, AttributeExpr):
             object_type = self._check_expr(expr.object, scope)
@@ -422,9 +501,43 @@ class TypeChecker:
                 self._error(expr.object, "cannot call a method on a void value")
             for arg in expr.args:
                 self._check_expr(arg, scope)
+            for arg in expr.kwargs.values():
+                self._check_expr(arg, scope)
             return self._set_expr_type(expr, ValueType.UNKNOWN)
 
         return self._set_expr_type(expr, ValueType.UNKNOWN)
+
+    def _existing_local_type(self, scope: Scope, name: str) -> ValueType | None:
+        if scope is self.table.global_scope:
+            return scope.lookup(name)
+        if name in scope.global_names:
+            return scope.root().lookup(name)
+        if name in scope.nonlocal_names:
+            return scope.lookup_enclosing(name)
+        return scope.values.get(name)
+
+    def _define_name(self, scope: Scope, name: str, value_type: ValueType) -> None:
+        if name in scope.global_names:
+            scope.root().define(name, value_type)
+            return
+        if name in scope.nonlocal_names:
+            parent = scope.parent
+            while parent is not None and parent.parent is not None:
+                if name in parent.values:
+                    parent.define(name, value_type)
+                    return
+                parent = parent.parent
+            return
+        scope.define(name, value_type)
+
+    def _check_delete_target(self, target, scope: Scope) -> None:
+        if isinstance(target, NameExpr):
+            return
+        if isinstance(target, IndexExpr):
+            self._check_expr(target.collection, scope)
+            self._check_expr(target.index, scope)
+            return
+        self._error(target, "unsupported delete target")
 
     def _set_expr_type(self, expr, value_type: ValueType) -> ValueType:
         expr.inferred_type = value_type
@@ -451,6 +564,27 @@ class TypeChecker:
         if local_function.return_type == ValueType.UNKNOWN and not local_function.has_value_return:
             local_function.return_type = ValueType.VOID
 
+    def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
+        total_params = len(function.param_names)
+        required_params = total_params - function.defaults_count
+        if len(expr.args) > total_params:
+            self._error(expr, f"function {expr.func_name!r} expects at most {total_params} arguments, got {len(expr.args)}")
+            return
+
+        provided = set(function.param_names[: len(expr.args)])
+        for name in expr.kwargs:
+            if name not in function.param_names:
+                self._error(expr, f"function {expr.func_name!r} got unexpected keyword argument {name!r}")
+                continue
+            if name in provided:
+                self._error(expr, f"function {expr.func_name!r} got multiple values for argument {name!r}")
+                continue
+            provided.add(name)
+
+        missing = [name for name in function.param_names[:required_params] if name not in provided]
+        if missing:
+            self._error(expr, f"function {expr.func_name!r} missing required argument {missing[0]!r}")
+
     def _lookup_local_function(self, name: str) -> FunctionType | None:
         for scope in reversed(self.local_functions):
             if name in scope:
@@ -466,9 +600,14 @@ class TypeChecker:
 
     def _check_builtin_call(self, expr: CallExpr, scope: Scope) -> ValueType:
         arg_types = [self._check_expr(arg, scope) for arg in expr.args]
+        for arg in expr.kwargs.values():
+            self._check_expr(arg, scope)
         if expr.func_name == "print":
             return self._set_expr_type(expr, ValueType.VOID)
         if expr.func_name == "len":
+            if expr.kwargs:
+                self._error(expr, "len() does not accept keyword arguments")
+                return self._set_expr_type(expr, ValueType.INT)
             if len(arg_types) != 1:
                 self._error(expr, "len() expects exactly 1 argument")
                 return self._set_expr_type(expr, ValueType.INT)
@@ -477,6 +616,9 @@ class TypeChecker:
                 self._error(expr.args[0], f"len() expects a list, tuple, string, dict, or set, got {container_type.value}")
             return self._set_expr_type(expr, ValueType.INT)
         if expr.func_name == "range":
+            if expr.kwargs:
+                self._error(expr, "range() does not accept keyword arguments")
+                return self._set_expr_type(expr, ValueType.UNKNOWN)
             if len(arg_types) not in {1, 2, 3}:
                 self._error(expr, "range() expects 1 to 3 arguments")
                 return self._set_expr_type(expr, ValueType.UNKNOWN)

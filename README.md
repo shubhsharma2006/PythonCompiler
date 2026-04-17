@@ -24,10 +24,16 @@ The project is no longer best described as "compile-to-C only". The supported la
 - `if` / `elif` / `else`
 - `while`
 - `for` loops over `range(...)`
+- `pass`, `break`, and `continue`
 - Top-level function definitions, calls, returns, recursion, and forward references
-- Nested functions with closure capture
+- Function default arguments and keyword calls on the VM path
+- Nested functions with closure capture and `nonlocal` mutation
+- `global` declarations for module-scope mutation from functions
 - List, tuple, dict, and set literals
 - Indexing for lists, tuples, strings, and dicts
+- Slicing for lists, tuples, and strings
+- Flat tuple/list unpacking assignment like `a, b = value`
+- `del` for names and subscript targets
 - `len(...)` for lists, tuples, strings, dicts, and sets
 - Top-level classes with instance fields, attributes, methods, and `__init__`
 - Local module imports via `import name` and `from name import symbol`
@@ -49,18 +55,20 @@ The native path still rejects:
 - exceptions
 - `for` loops
 - list/tuple/dict/set runtime features
+- slicing, unpacking assignment, delete, and global/nonlocal mutation
 - classes, attributes, and methods
+- default arguments and keyword calls
 - VM-only builtin behaviors like multi-argument `print(...)`
 
 ## Explicitly unsupported today
 
 - decorators
-- default arguments and keyword arguments
+- positional-only parameters, keyword-only parameters, `*args`, and `**kwargs`
 - comprehensions
 - generators / `yield`
 - context managers / `with`
-- `global` / `nonlocal`
-- slicing
+- starred unpacking assignment
+- attribute deletion
 - full Python runtime semantics
 
 Unsupported features fail compilation with structured diagnostics.
@@ -131,9 +139,9 @@ The suite covers:
 - VM execution for the current language surface
 - direct VM runtime helper coverage
 - VM execution for `for` loops over `range(...)`
-- VM execution for list/tuple/dict/set literals, indexing, and `len(...)`
+- VM execution for list/tuple/dict/set literals, indexing, slicing, unpacking, deletion, and `len(...)`
 - VM execution for top-level classes, attributes, and methods
-- VM execution for local imports, closures, typed/untyped exceptions, `try/finally`, and multi-argument print
+- VM execution for local imports, closures, `global`/`nonlocal`, typed/untyped exceptions, `try/finally`, and multi-argument print
 - short-circuit correctness
 - forward references and recursion
 - compile-time rejection of unsupported syntax and mixed invalid operations

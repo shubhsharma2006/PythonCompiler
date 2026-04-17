@@ -75,6 +75,37 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output, "hello, world!")
 
+    def test_execute_source_supports_default_arguments(self):
+        result, run_output, rendered = self.execute_program(
+            "def greet(name, greeting=\"Hello\"):\n"
+            "    return greeting + \", \" + name\n\n"
+            "print(greet(\"Ada\"))\n"
+            "print(greet(\"Bob\", \"Hi\"))\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["Hello, Ada", "Hi, Bob"])
+
+    def test_execute_source_supports_keyword_arguments(self):
+        result, run_output, rendered = self.execute_program(
+            "def combine(a, b, c=3):\n"
+            "    return a + b + c\n\n"
+            "print(combine(1, c=5, b=2))\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["8"])
+
+    def test_execute_source_supports_method_keyword_arguments(self):
+        result, run_output, rendered = self.execute_program(
+            "class Greeter:\n"
+            "    def say(self, name, greeting=\"Hello\"):\n"
+            "        return greeting + \", \" + name\n\n"
+            "g = Greeter()\n"
+            "print(g.say(name=\"Ada\"))\n"
+            "print(g.say(\"Bob\", greeting=\"Hi\"))\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["Hello, Ada", "Hi, Bob"])
+
     def test_execute_source_supports_f_strings(self):
         result, run_output, rendered = self.execute_program(
             'name = "Ada"\nprint(f"Hello {name}")\n'
@@ -191,6 +222,69 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["3", "20", "4", "e"])
 
+    def test_execute_source_supports_slicing(self):
+        result, run_output, rendered = self.execute_program(
+            "items = [0, 1, 2, 3, 4]\n"
+            'word = "hello"\n'
+            "print(items[1:3])\n"
+            "print(items[:2])\n"
+            "print(items[::2])\n"
+            "print(items[::-1])\n"
+            "print(word[1:4])\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["[1, 2]", "[0, 1]", "[0, 2, 4]", "[4, 3, 2, 1, 0]", "ell"])
+
+    def test_execute_source_supports_unpack_assignment(self):
+        result, run_output, rendered = self.execute_program(
+            "a, b = (1, 2)\n"
+            "c, d = [3, 4]\n"
+            "print(a)\n"
+            "print(b)\n"
+            "print(c + d)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["1", "2", "7"])
+
+    def test_execute_source_supports_pass_delete_global_and_nonlocal(self):
+        result, run_output, rendered = self.execute_program(
+            "items = [1, 2, 3]\n"
+            "if True:\n"
+            "    pass\n"
+            "for _ in range(1):\n"
+            "    pass\n"
+            "def noop():\n"
+            "    pass\n"
+            "class Box:\n"
+            "    def touch(self):\n"
+            "        pass\n"
+            "noop()\n"
+            "Box().touch()\n"
+            "del items[0]\n"
+            'd = {"x": 1, "y": 2}\n'
+            'del d["x"]\n'
+            "name = 5\n"
+            "del name\n"
+            "x = 1\n"
+            "def update():\n"
+            "    global x\n"
+            "    x = x + 1\n"
+            "def outer():\n"
+            "    y = 10\n"
+            "    def inner():\n"
+            "        nonlocal y\n"
+            "        y = y + 5\n"
+            "        return y\n"
+            "    return inner()\n"
+            "update()\n"
+            "print(items[0])\n"
+            "print(len(d))\n"
+            "print(x)\n"
+            "print(outer())\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["2", "1", "2", "15"])
+
     def test_execute_source_supports_dicts_sets_and_container_methods(self):
         result, run_output, rendered = self.execute_program(
             'd = {"a": 1, "b": 2}\n'
@@ -261,7 +355,69 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("native compilation does not support exceptions yet", result.errors.render())
 
+    def test_compile_source_rejects_default_and_keyword_arguments_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "def add(a, b=1):\n"
+                "    return a + b\n\n"
+                "print(add(a=2))\n",
+                filename="inline.py",
+                output=output_path,
+        )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support default or keyword arguments yet", result.errors.render())
 
+    def test_compile_source_rejects_core_vm_only_features_for_native_path(self):
+        samples = [
+            "items = [1, 2]\nprint(items[:1])\n",
+            "a, b = (1, 2)\nprint(a)\n",
+            "items = [1, 2]\ndel items[0]\nprint(len(items))\n",
+            "x = 1\ndef update():\n    global x\n    x = x + 1\nprint(x)\n",
+        ]
+        for source in samples:
+            with self.subTest(source=source):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_path = os.path.join(temp_dir, "program.c")
+                    result = compile_source(source, filename="inline.py", output=output_path)
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "native compilation does not support slicing, unpacking assignment, delete, or global/nonlocal yet",
+                    result.errors.render(),
+                )
+
+    def test_unpack_count_mismatch_fails_at_runtime(self):
+        result, _, rendered = self.execute_program("a, b = (1, 2, 3)\n")
+        self.assertFalse(result.success)
+        self.assertIn("unpack expected 2 values, got 3", rendered)
+
+    def test_starred_unpacking_is_rejected(self):
+        result, _, rendered = self.execute_program("a, *rest = [1, 2, 3]\n")
+        self.assertFalse(result.success)
+        self.assertIn("starred assignment is not supported yet", rendered)
+
+    def test_nonlocal_without_enclosing_binding_is_rejected(self):
+        result, _, rendered = self.execute_program(
+            "def outer():\n"
+            "    def inner():\n"
+            "        nonlocal missing\n"
+            "        missing = 1\n"
+            "    return inner()\n"
+            "print(outer())\n"
+        )
+        self.assertFalse(result.success)
+        self.assertIn("no binding for nonlocal 'missing' found", rendered)
+
+    def test_unsupported_delete_target_is_rejected(self):
+        result, _, rendered = self.execute_program(
+            "class Box:\n"
+            "    pass\n"
+            "box = Box()\n"
+            "box.value = 1\n"
+            "del box.value\n"
+        )
+        self.assertFalse(result.success)
+        self.assertIn("only name and subscript delete targets are supported", rendered)
 
     def test_forward_reference_compiles(self):
         source = (
@@ -294,7 +450,17 @@ class PipelineTests(unittest.TestCase):
         )
         result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
         self.assertFalse(result.success)
-        self.assertIn("expects 2 arguments, got 1", rendered)
+        self.assertIn("missing required argument 'b'", rendered)
+
+    def test_duplicate_keyword_argument_fails(self):
+        source = (
+            "def add(a, b=1):\n"
+            "    return a + b\n\n"
+            "print(add(1, a=2))\n"
+        )
+        result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
+        self.assertFalse(result.success)
+        self.assertIn("got multiple values for argument 'a'", rendered)
 
     def test_invalid_syntax_is_fatal(self):
         result, _, _, rendered, _, _, _, _ = self.compile_program("x = 1 $ 2\n", run=False)

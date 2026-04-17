@@ -21,6 +21,7 @@ class SymbolCollector:
                     name=statement.name,
                     param_names=statement.params,
                     param_types=[ValueType.UNKNOWN for _ in statement.params],
+                    defaults_count=len(statement.defaults),
                     node=statement,
                 )
             elif isinstance(statement, ClassDef):

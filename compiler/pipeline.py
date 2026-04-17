@@ -13,10 +13,12 @@ from compiler.core.ast import (
     CallExpr,
     CompareExpr,
     ClassDef,
+    DeleteStmt,
     DictExpr,
     ForStmt,
     FromImportStmt,
     FunctionDef,
+    GlobalStmt,
     IfStmt,
     ImportStmt,
     IndexExpr,
@@ -30,7 +32,10 @@ from compiler.core.ast import (
     UnaryExpr,
     ListExpr,
     MethodCallExpr,
+    NonlocalStmt,
     TupleExpr,
+    SliceExpr,
+    UnpackAssignStmt,
 )
 from compiler.core.types import ValueType
 from compiler.frontend import LexedSource, ParsedModule, lex_source, lower_cst, parse_tokens
@@ -258,6 +263,164 @@ def _program_uses_object_features(program: Program) -> bool:
     return walk(program.body)
 
 
+def _expr_uses_call_signature_features(expr) -> bool:
+    if isinstance(expr, CallExpr):
+        return bool(expr.kwargs) or any(_expr_uses_call_signature_features(arg) for arg in expr.args) or any(
+            _expr_uses_call_signature_features(arg) for arg in expr.kwargs.values()
+        )
+    if isinstance(expr, MethodCallExpr):
+        return (
+            bool(expr.kwargs)
+            or _expr_uses_call_signature_features(expr.object)
+            or any(_expr_uses_call_signature_features(arg) for arg in expr.args)
+            or any(_expr_uses_call_signature_features(arg) for arg in expr.kwargs.values())
+        )
+    if isinstance(expr, BinaryExpr):
+        return _expr_uses_call_signature_features(expr.left) or _expr_uses_call_signature_features(expr.right)
+    if isinstance(expr, CompareExpr):
+        return _expr_uses_call_signature_features(expr.left) or _expr_uses_call_signature_features(expr.right)
+    if isinstance(expr, BoolOpExpr):
+        return _expr_uses_call_signature_features(expr.left) or _expr_uses_call_signature_features(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return _expr_uses_call_signature_features(expr.operand)
+    if isinstance(expr, IndexExpr):
+        return _expr_uses_call_signature_features(expr.collection) or _expr_uses_call_signature_features(expr.index)
+    if isinstance(expr, ListExpr):
+        return any(_expr_uses_call_signature_features(element) for element in expr.elements)
+    if isinstance(expr, TupleExpr):
+        return any(_expr_uses_call_signature_features(element) for element in expr.elements)
+    if isinstance(expr, DictExpr):
+        return any(_expr_uses_call_signature_features(key) for key in expr.keys) or any(
+            _expr_uses_call_signature_features(value) for value in expr.values
+        )
+    if isinstance(expr, SetExpr):
+        return any(_expr_uses_call_signature_features(element) for element in expr.elements)
+    if isinstance(expr, AttributeExpr):
+        return _expr_uses_call_signature_features(expr.object)
+    return False
+
+
+def _program_uses_call_signature_features(program: Program) -> bool:
+    def function_uses_defaults(function: FunctionDef) -> bool:
+        return bool(function.defaults) or any(_expr_uses_call_signature_features(default) for default in function.defaults)
+
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef):
+                if function_uses_defaults(statement) or walk(statement.body):
+                    return True
+            elif isinstance(statement, ClassDef):
+                for method in statement.methods:
+                    if function_uses_defaults(method) or walk(method.body):
+                        return True
+            elif isinstance(statement, IfStmt):
+                if _expr_uses_call_signature_features(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, WhileStmt):
+                if _expr_uses_call_signature_features(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, ForStmt):
+                if _expr_uses_call_signature_features(statement.iterator) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, TryStmt):
+                if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers) or walk(statement.finalbody):
+                    return True
+            elif isinstance(statement, PrintStmt):
+                if any(_expr_uses_call_signature_features(value) for value in statement.values):
+                    return True
+                if statement.sep is not None and _expr_uses_call_signature_features(statement.sep):
+                    return True
+                if statement.end is not None and _expr_uses_call_signature_features(statement.end):
+                    return True
+            else:
+                value = getattr(statement, "value", None)
+                expr = getattr(statement, "expr", None)
+                if value is not None and _expr_uses_call_signature_features(value):
+                    return True
+                if expr is not None and _expr_uses_call_signature_features(expr):
+                    return True
+        return False
+
+    return walk(program.body)
+
+
+def _expr_uses_slicing(expr) -> bool:
+    if isinstance(expr, SliceExpr):
+        return True
+    if isinstance(expr, IndexExpr):
+        return _expr_uses_slicing(expr.collection) or _expr_uses_slicing(expr.index)
+    if isinstance(expr, CallExpr):
+        return any(_expr_uses_slicing(arg) for arg in expr.args) or any(_expr_uses_slicing(arg) for arg in expr.kwargs.values())
+    if isinstance(expr, MethodCallExpr):
+        return (
+            _expr_uses_slicing(expr.object)
+            or any(_expr_uses_slicing(arg) for arg in expr.args)
+            or any(_expr_uses_slicing(arg) for arg in expr.kwargs.values())
+        )
+    if isinstance(expr, BinaryExpr):
+        return _expr_uses_slicing(expr.left) or _expr_uses_slicing(expr.right)
+    if isinstance(expr, CompareExpr):
+        return _expr_uses_slicing(expr.left) or _expr_uses_slicing(expr.right)
+    if isinstance(expr, BoolOpExpr):
+        return _expr_uses_slicing(expr.left) or _expr_uses_slicing(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return _expr_uses_slicing(expr.operand)
+    if isinstance(expr, ListExpr):
+        return any(_expr_uses_slicing(element) for element in expr.elements)
+    if isinstance(expr, TupleExpr):
+        return any(_expr_uses_slicing(element) for element in expr.elements)
+    if isinstance(expr, DictExpr):
+        return any(_expr_uses_slicing(key) for key in expr.keys) or any(_expr_uses_slicing(value) for value in expr.values)
+    if isinstance(expr, SetExpr):
+        return any(_expr_uses_slicing(element) for element in expr.elements)
+    if isinstance(expr, AttributeExpr):
+        return _expr_uses_slicing(expr.object)
+    return False
+
+
+def _program_uses_core_vm_only_features(program: Program) -> bool:
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, (UnpackAssignStmt, DeleteStmt, GlobalStmt, NonlocalStmt)):
+                return True
+            if isinstance(statement, FunctionDef):
+                if any(_expr_uses_slicing(default) for default in statement.defaults) or walk(statement.body):
+                    return True
+            elif isinstance(statement, ClassDef):
+                for method in statement.methods:
+                    if any(_expr_uses_slicing(default) for default in method.defaults) or walk(method.body):
+                        return True
+            elif isinstance(statement, IfStmt):
+                if _expr_uses_slicing(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, WhileStmt):
+                if _expr_uses_slicing(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, ForStmt):
+                if _expr_uses_slicing(statement.iterator) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, TryStmt):
+                if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers) or walk(statement.finalbody):
+                    return True
+            elif isinstance(statement, PrintStmt):
+                if any(_expr_uses_slicing(value) for value in statement.values):
+                    return True
+                if statement.sep is not None and _expr_uses_slicing(statement.sep):
+                    return True
+                if statement.end is not None and _expr_uses_slicing(statement.end):
+                    return True
+            else:
+                value = getattr(statement, "value", None)
+                expr = getattr(statement, "expr", None)
+                if value is not None and _expr_uses_slicing(value):
+                    return True
+                if expr is not None and _expr_uses_slicing(expr):
+                    return True
+        return False
+
+    return walk(program.body)
+
+
 VM_ONLY_BUILTIN_CALLS = {
     "repr", "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
     "frozenset", "complex", "type", "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
@@ -272,7 +435,9 @@ def _expr_uses_vm_only_builtin_calls(expr) -> bool:
     if isinstance(expr, CallExpr):
         if expr.func_name in VM_ONLY_BUILTIN_CALLS:
             return True
-        return any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.args)
+        return any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.args) or any(
+            _expr_uses_vm_only_builtin_calls(arg) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, BinaryExpr):
         return _expr_uses_vm_only_builtin_calls(expr.left) or _expr_uses_vm_only_builtin_calls(expr.right)
     if isinstance(expr, CompareExpr):
@@ -290,7 +455,11 @@ def _expr_uses_vm_only_builtin_calls(expr) -> bool:
     if isinstance(expr, AttributeExpr):
         return _expr_uses_vm_only_builtin_calls(expr.object)
     if isinstance(expr, MethodCallExpr):
-        return _expr_uses_vm_only_builtin_calls(expr.object) or any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.args)
+        return (
+            _expr_uses_vm_only_builtin_calls(expr.object)
+            or any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.args)
+            or any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.kwargs.values())
+        )
     return False
 
 
@@ -340,7 +509,9 @@ def _expr_uses_vm_only_string_features(expr, semantic: SemanticModel) -> bool:
             return True
         return _expr_uses_vm_only_string_features(expr.left, semantic) or _expr_uses_vm_only_string_features(expr.right, semantic)
     if isinstance(expr, CallExpr):
-        return any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.args)
+        return any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.args) or any(
+            _expr_uses_vm_only_string_features(arg, semantic) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, CompareExpr):
         return _expr_uses_vm_only_string_features(expr.left, semantic) or _expr_uses_vm_only_string_features(expr.right, semantic)
     if isinstance(expr, BoolOpExpr):
@@ -356,7 +527,11 @@ def _expr_uses_vm_only_string_features(expr, semantic: SemanticModel) -> bool:
     if isinstance(expr, AttributeExpr):
         return _expr_uses_vm_only_string_features(expr.object, semantic)
     if isinstance(expr, MethodCallExpr):
-        return _expr_uses_vm_only_string_features(expr.object, semantic) or any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.args)
+        return (
+            _expr_uses_vm_only_string_features(expr.object, semantic)
+            or any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.args)
+            or any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.kwargs.values())
+        )
     return False
 
 
@@ -529,12 +704,20 @@ def compile_source(
         result.errors.error("Codegen", "native compilation does not support exceptions yet")
         result.success = False
         return result
+    if _program_uses_core_vm_only_features(result.program):
+        result.errors.error("Codegen", "native compilation does not support slicing, unpacking assignment, delete, or global/nonlocal yet")
+        result.success = False
+        return result
     if _program_uses_container_features(result.program):
         result.errors.error("Codegen", "native compilation does not support lists, tuples, indexing, or len() yet")
         result.success = False
         return result
     if _program_uses_object_features(result.program):
         result.errors.error("Codegen", "native compilation does not support classes, attributes, or methods yet")
+        result.success = False
+        return result
+    if _program_uses_call_signature_features(result.program):
+        result.errors.error("Codegen", "native compilation does not support default or keyword arguments yet")
         result.success = False
         return result
     if _program_uses_vm_only_builtin_calls(result.program):

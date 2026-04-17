@@ -10,6 +10,7 @@ from compiler.vm.objects import (
     PyListObject,
     PyStrObject,
     py_binary_op,
+    bind_function_args,
     py_compare_op,
     py_index_get,
     py_load_attr,
@@ -74,6 +75,14 @@ class VMRuntimeTests(unittest.TestCase):
         self.assertEqual(list(builtin_range(1, 4)), [1, 2, 3])
         with self.assertRaises(VMError):
             builtin_range(True)
+
+    def test_bind_function_args_applies_defaults_and_keywords(self):
+        args = bind_function_args("combine", ["a", "b", "c"], [3], [1], {"b": 2})
+        self.assertEqual(args, [1, 2, 3])
+
+    def test_bind_function_args_rejects_duplicate_keyword(self):
+        with self.assertRaisesRegex(VMError, "multiple values"):
+            bind_function_args("combine", ["a", "b"], [], [1], {"a": 2})
 
 
 if __name__ == "__main__":

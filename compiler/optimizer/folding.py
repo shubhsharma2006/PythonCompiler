@@ -6,12 +6,15 @@ from compiler.core.ast import (
     AttributeExpr,
     BinaryExpr,
     BoolOpExpr,
+    CallExpr,
     CompareExpr,
     ConstantExpr,
+    DeleteStmt,
     ExprStmt,
     ClassDef,
     FunctionDef,
     ForStmt,
+    GlobalStmt,
     IfStmt,
     IfExpr,
     IndexExpr,
@@ -19,12 +22,16 @@ from compiler.core.ast import (
     LambdaExpr,
     ListExpr,
     MethodCallExpr,
+    NonlocalStmt,
+    PassStmt,
     PrintStmt,
     Program,
     ReturnStmt,
     SetExpr,
+    SliceExpr,
     TupleExpr,
     UnaryExpr,
+    UnpackAssignStmt,
     WhileStmt,
 )
 
@@ -45,9 +52,15 @@ class ConstantFolder:
     def _optimize_statement(self, statement):
         if isinstance(statement, AssignStmt):
             statement.value = self._optimize_expr(statement.value)
+        elif isinstance(statement, UnpackAssignStmt):
+            statement.value = self._optimize_expr(statement.value)
         elif isinstance(statement, AttributeAssignStmt):
             statement.object = self._optimize_expr(statement.object)
             statement.value = self._optimize_expr(statement.value)
+        elif isinstance(statement, DeleteStmt):
+            statement.targets = [self._optimize_expr(target) for target in statement.targets]
+        elif isinstance(statement, (PassStmt, GlobalStmt, NonlocalStmt)):
+            return statement
         elif isinstance(statement, PrintStmt):
             statement.values = [self._optimize_expr(value) for value in statement.values]
             if statement.sep is not None:
@@ -69,9 +82,11 @@ class ConstantFolder:
             statement.body = self._optimize_statements(statement.body)
             statement.orelse = self._optimize_statements(statement.orelse)
         elif isinstance(statement, FunctionDef):
+            statement.defaults = [self._optimize_expr(default) for default in statement.defaults]
             statement.body = self._optimize_statements(statement.body)
         elif isinstance(statement, ClassDef):
             for method in statement.methods:
+                method.defaults = [self._optimize_expr(default) for default in method.defaults]
                 method.body = self._optimize_statements(method.body)
         elif isinstance(statement, ReturnStmt) and statement.value is not None:
             statement.value = self._optimize_expr(statement.value)
@@ -172,6 +187,15 @@ class ConstantFolder:
             expr.index = self._optimize_expr(expr.index)
             return expr
 
+        if isinstance(expr, SliceExpr):
+            if expr.lower is not None:
+                expr.lower = self._optimize_expr(expr.lower)
+            if expr.upper is not None:
+                expr.upper = self._optimize_expr(expr.upper)
+            if expr.step is not None:
+                expr.step = self._optimize_expr(expr.step)
+            return expr
+
         if isinstance(expr, AttributeExpr):
             expr.object = self._optimize_expr(expr.object)
             return expr
@@ -179,6 +203,12 @@ class ConstantFolder:
         if isinstance(expr, MethodCallExpr):
             expr.object = self._optimize_expr(expr.object)
             expr.args = [self._optimize_expr(arg) for arg in expr.args]
+            expr.kwargs = {name: self._optimize_expr(arg) for name, arg in expr.kwargs.items()}
+            return expr
+
+        if isinstance(expr, CallExpr):
+            expr.args = [self._optimize_expr(arg) for arg in expr.args]
+            expr.kwargs = {name: self._optimize_expr(arg) for name, arg in expr.kwargs.items()}
             return expr
 
         return expr
