@@ -28,10 +28,10 @@ class FrontendTests(unittest.TestCase):
         self.assertGreater(len(lexed.tokens), 0)
 
     def test_lowers_import_statements(self):
-        _, _, program, errors = self.frontend("import math\nfrom util import add\n")
+        _, _, program, errors = self.frontend("import math\nimport os.path\nfrom util import add\n")
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())
-        self.assertEqual(len(program.body), 2)
+        self.assertEqual(len(program.body), 3)
 
     def test_lowers_multi_argument_print_and_keywords(self):
         _, _, program, errors = self.frontend('print("hello", "world", sep=", ", end="!")\n')
@@ -142,6 +142,19 @@ class FrontendTests(unittest.TestCase):
             "        y = y + 1\n"
             "        return y\n"
             "    return inner()\n"
+        )
+        self.assertIsNotNone(program)
+        self.assertFalse(errors.has_errors(), errors.render())
+
+    def test_lowers_with_statement(self):
+        _, _, program, errors = self.frontend(
+            "class CM:\n"
+            "    def __enter__(self):\n"
+            "        return 1\n"
+            "    def __exit__(self, exc_type, exc, tb):\n"
+            "        pass\n"
+            "with CM() as value:\n"
+            "    print(value)\n"
         )
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())

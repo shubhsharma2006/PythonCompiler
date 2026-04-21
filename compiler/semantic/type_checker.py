@@ -39,6 +39,7 @@ from compiler.core.ast import (
     UnaryExpr,
     UnpackAssignStmt,
     WhileStmt,
+    WithStmt,
 )
 from compiler.core.types import FunctionType, ValueType, can_truth_test, is_numeric, merge_types
 from compiler.semantic.model import Scope, SymbolTable
@@ -172,9 +173,10 @@ class TypeChecker:
             return
 
         if isinstance(statement, ImportStmt):
-            self._define_name(scope, statement.alias or statement.module, ValueType.UNKNOWN)
+            binding_name = self._import_binding_name(statement)
+            self._define_name(scope, binding_name, ValueType.UNKNOWN)
             if self.current_function is not None:
-                self.current_function.local_types[statement.alias or statement.module] = ValueType.UNKNOWN
+                self.current_function.local_types[binding_name] = ValueType.UNKNOWN
             return
 
         if isinstance(statement, FromImportStmt):
@@ -242,6 +244,18 @@ class TypeChecker:
             for handler in statement.handlers:
                 self._check_handler(handler, scope)
             for child in statement.finalbody:
+                self._check_statement(child, scope)
+            return
+
+        if isinstance(statement, WithStmt):
+            context_type = self._check_expr(statement.context_expr, scope)
+            if context_type == ValueType.VOID:
+                self._error(statement.context_expr, "with context expression cannot be void")
+            if statement.optional_var is not None:
+                self._define_name(scope, statement.optional_var, ValueType.UNKNOWN)
+                if self.current_function is not None:
+                    self.current_function.local_types[statement.optional_var] = ValueType.UNKNOWN
+            for child in statement.body:
                 self._check_statement(child, scope)
             return
 
@@ -641,3 +655,7 @@ class TypeChecker:
     @staticmethod
     def _is_range_call(expr) -> bool:
         return isinstance(expr, CallExpr) and expr.func_name == "range"
+
+    @staticmethod
+    def _import_binding_name(statement: ImportStmt) -> str:
+        return statement.alias or statement.module.split(".", 1)[0]

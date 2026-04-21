@@ -37,6 +37,9 @@ The project is no longer best described as "compile-to-C only". The supported la
 - `len(...)` for lists, tuples, strings, dicts, and sets
 - Top-level classes with instance fields, attributes, methods, and `__init__`
 - Local module imports via `import name` and `from name import symbol`
+- Standard-library import fallback through host `importlib` on the VM path
+- Dotted imports such as `import os.path`
+- Single-item `with` statements and context managers
 - `raise`, `try/except`, `try/finally`, and named typed handlers like `except MyError as err`
 - Multi-argument `print(...)` with `sep=` and `end=`
 - f-strings lowered through the frontend
@@ -56,6 +59,7 @@ The native path still rejects:
 - `for` loops
 - list/tuple/dict/set runtime features
 - slicing, unpacking assignment, delete, and global/nonlocal mutation
+- `with` statements
 - classes, attributes, and methods
 - default arguments and keyword calls
 - VM-only builtin behaviors like multi-argument `print(...)`
@@ -66,7 +70,7 @@ The native path still rejects:
 - positional-only parameters, keyword-only parameters, `*args`, and `**kwargs`
 - comprehensions
 - generators / `yield`
-- context managers / `with`
+- multiple context managers in one `with` statement
 - starred unpacking assignment
 - attribute deletion
 - full Python runtime semantics
@@ -141,7 +145,7 @@ The suite covers:
 - VM execution for `for` loops over `range(...)`
 - VM execution for list/tuple/dict/set literals, indexing, slicing, unpacking, deletion, and `len(...)`
 - VM execution for top-level classes, attributes, and methods
-- VM execution for local imports, closures, `global`/`nonlocal`, typed/untyped exceptions, `try/finally`, and multi-argument print
+- VM execution for local imports, stdlib import fallback, closures, `global`/`nonlocal`, `with`, typed/untyped exceptions, `try/finally`, and multi-argument print
 - short-circuit correctness
 - forward references and recursion
 - compile-time rejection of unsupported syntax and mixed invalid operations

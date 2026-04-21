@@ -42,6 +42,7 @@ from compiler.core.ast import (
     UnaryExpr,
     UnpackAssignStmt,
     WhileStmt,
+    WithStmt,
     BreakStmt,
     ContinueStmt,
 )
@@ -147,6 +148,23 @@ class PythonSubsetLowerer:
         if isinstance(node, ast.Nonlocal):
             return NonlocalStmt(span=self._span(node), names=list(node.names))
 
+        if isinstance(node, ast.With):
+            if len(node.items) != 1:
+                self._unsupported(node, "multiple context managers in one with statement are not supported yet")
+                return None
+            item = node.items[0]
+            context_expr = self._lower_expr(item.context_expr)
+            if context_expr is None:
+                return None
+            optional_var = None
+            if item.optional_vars is not None:
+                if not isinstance(item.optional_vars, ast.Name):
+                    self._unsupported(item.optional_vars, "only simple name targets in with-as clauses are supported")
+                    return None
+                optional_var = item.optional_vars.id
+            body = self._lower_body(node.body, allow_docstring=True) or []
+            return WithStmt(span=self._span(node), context_expr=context_expr, optional_var=optional_var, body=body)
+
         if isinstance(node, ast.If):
             condition = self._lower_expr(node.test)
             if condition is None:
@@ -245,9 +263,6 @@ class PythonSubsetLowerer:
         if isinstance(node, ast.Import):
             lowered = []
             for alias in node.names:
-                if "." in alias.name:
-                    self._unsupported(node, "dotted import targets are not supported yet")
-                    return None
                 lowered.append(ImportStmt(span=self._span(node), module=alias.name, alias=alias.asname))
             return lowered
 

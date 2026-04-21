@@ -120,6 +120,11 @@ SOURCE_TESTS = [
         "expected": ["9"],
     },
     {
+        "name": "Stdlib import fallback",
+        "source": """import math\nfrom math import sqrt\nimport os.path\nprint(math.sqrt(9))\nprint(sqrt(16))\nprint(os.path.basename("/tmp/demo.txt"))\n""",
+        "expected": ["3.0", "4.0", "demo.txt"],
+    },
+    {
         "name": "Closure capture",
         "source": """def outer(x):\n    def inner(y):\n        return x + y\n    return inner(3)\n\nprint(outer(4))\n""",
         "expected": ["7"],
@@ -148,6 +153,11 @@ SOURCE_TESTS = [
         "name": "Pass delete global and nonlocal",
         "source": """items = [1, 2, 3]\nif True:\n    pass\nfor _ in range(1):\n    pass\ndef noop():\n    pass\nclass Box:\n    def touch(self):\n        pass\nnoop()\nBox().touch()\ndel items[0]\nd = {"x": 1, "y": 2}\ndel d["x"]\nx = 1\ndef update():\n    global x\n    x = x + 1\ndef outer():\n    y = 10\n    def inner():\n        nonlocal y\n        y = y + 5\n        return y\n    return inner()\nupdate()\nprint(items[0])\nprint(len(d))\nprint(x)\nprint(outer())\n""",
         "expected": ["2", "1", "2", "15"],
+    },
+    {
+        "name": "With statement",
+        "source": """class CM:\n    def __enter__(self):\n        print("enter")\n        return "body"\n    def __exit__(self, exc_type, exc, tb):\n        print("exit")\nwith CM() as value:\n    print(value)\n""",
+        "expected": ["enter", "body", "exit"],
     },
     {
         "name": "Dicts sets and container methods",
@@ -216,7 +226,7 @@ NEGATIVE_TESTS = [
     {
         "name": "Reject missing modules",
         "source": "from missing import add\nprint(add(1, 2))\n",
-        "expected_substring": "cannot resolve local module",
+        "expected_substring": "cannot import 'missing'",
     },
     {
         "name": "Reject mixed arithmetic",
@@ -277,6 +287,11 @@ NEGATIVE_TESTS = [
         "name": "Reject unsupported delete target",
         "source": "class Box:\n    pass\nbox = Box()\nbox.value = 1\ndel box.value\n",
         "expected_substring": "only name and subscript delete targets are supported",
+    },
+    {
+        "name": "Reject multiple with contexts",
+        "source": "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, exc_type, exc, tb):\n        pass\nwith CM() as a, CM() as b:\n    print(a)\n",
+        "expected_substring": "multiple context managers in one with statement are not supported yet",
     },
 ]
 

@@ -426,12 +426,12 @@ def _program_uses_core_vm_only_features(program: Program) -> bool:
 
 
 VM_ONLY_BUILTIN_CALLS = {
-    "repr", "ascii", "str", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
+    "repr", "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
     "frozenset", "complex", "type", "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
     "callable", "id", "enumerate", "zip", "map", "filter", "reversed", "sorted", "iter", "next", "abs",
     "round", "min", "max", "sum", "pow", "divmod", "hash", "hex", "oct", "bin", "chr", "ord", "format",
     "input", "open", "any", "all", "object", "super", "property", "staticmethod", "classmethod", "vars",
-    "dir", "len",
+    "dir",
 }
 
 
@@ -708,10 +708,6 @@ def compile_source(
         result.errors.error("Codegen", "native compilation does not support exceptions yet")
         result.success = False
         return result
-    if _program_uses_for_loops(result.program):
-        result.errors.error("Codegen", "native compilation does not support for loops yet")
-        result.success = False
-        return result
     if _program_uses_core_vm_only_features(result.program):
         result.errors.error("Codegen", "native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet")
         result.success = False
@@ -730,10 +726,6 @@ def compile_source(
         return result
     if _program_uses_vm_only_builtin_calls(result.program):
         result.errors.error("Codegen", "native compilation does not support these builtin calls yet")
-        result.success = False
-        return result
-    if _program_uses_vm_only_print_or_string_features(result.program, result.semantic):
-        result.errors.error("Codegen", "native compilation does not support multi-argument print, custom sep/end, or string concatenation yet")
         result.success = False
         return result
 

@@ -40,6 +40,7 @@ from compiler.core.ast import (
     UnaryExpr,
     UnpackAssignStmt,
     WhileStmt,
+    WithStmt,
     BreakStmt,
     ContinueStmt,
 )
@@ -204,9 +205,27 @@ class BytecodeLowerer:
                 instructions.append(Instruction("END_FINALLY"))
             return
 
+        if isinstance(statement, WithStmt):
+            finally_label = self._new_label("with_exit")
+            self._emit_expr(statement.context_expr, instructions, parent_key)
+            instructions.append(Instruction("WITH_ENTER"))
+            if statement.optional_var is not None:
+                self._emit_store_name(statement.optional_var, instructions)
+            else:
+                instructions.append(Instruction("POP_TOP"))
+            instructions.append(Instruction("TRY_FINALLY", finally_label))
+            for child in statement.body:
+                self._emit_statement(child, instructions, parent_key)
+            instructions.append(Instruction("POP_FINALLY"))
+            instructions.append(Instruction("JUMP", finally_label))
+            instructions.append(Instruction("LABEL", finally_label))
+            instructions.append(Instruction("WITH_EXIT"))
+            instructions.append(Instruction("END_FINALLY"))
+            return
+
         if isinstance(statement, ImportStmt):
-            instructions.append(Instruction("IMPORT_MODULE", statement.module))
-            self._emit_store_name(statement.alias or statement.module, instructions)
+            instructions.append(Instruction("IMPORT_MODULE", (statement.module, statement.alias is None)))
+            self._emit_store_name(self._import_binding_name(statement), instructions)
             return
 
         if isinstance(statement, FromImportStmt):
@@ -481,6 +500,10 @@ class BytecodeLowerer:
 
     def _declares_nonlocal(self, name: str) -> bool:
         return bool(self.scope_stack and name in self.scope_stack[-1][1])
+
+    @staticmethod
+    def _import_binding_name(statement: ImportStmt) -> str:
+        return statement.alias or statement.module.split(".", 1)[0]
 
     def _literal_default(self, expr):
         if isinstance(expr, ConstantExpr):

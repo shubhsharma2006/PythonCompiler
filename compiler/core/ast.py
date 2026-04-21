@@ -100,6 +100,13 @@ class NonlocalStmt(Statement):
 
 
 @dataclass
+class WithStmt(Statement):
+    context_expr: Expression
+    optional_var: str | None
+    body: list[Statement]
+
+
+@dataclass
 class PrintStmt(Statement):
     values: list[Expression]
     sep: Expression | None = None

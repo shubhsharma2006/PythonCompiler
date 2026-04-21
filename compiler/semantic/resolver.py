@@ -39,6 +39,7 @@ from compiler.core.ast import (
     UnaryExpr,
     UnpackAssignStmt,
     WhileStmt,
+    WithStmt,
 )
 from compiler.core.types import FunctionType, ValueType
 from compiler.semantic.model import Scope, SymbolTable
@@ -150,7 +151,7 @@ class NameResolver:
             return
 
         if isinstance(statement, ImportStmt):
-            self._define_name(scope, statement.alias or statement.module, ValueType.UNKNOWN)
+            self._define_name(scope, self._import_binding_name(statement), ValueType.UNKNOWN)
             return
 
         if isinstance(statement, FromImportStmt):
@@ -203,6 +204,14 @@ class NameResolver:
             for handler in statement.handlers:
                 self._resolve_handler(handler, scope)
             for child in statement.finalbody:
+                self._resolve_statement(child, scope)
+            return
+
+        if isinstance(statement, WithStmt):
+            self._resolve_expr(statement.context_expr, scope)
+            if statement.optional_var is not None:
+                self._define_name(scope, statement.optional_var, ValueType.UNKNOWN)
+            for child in statement.body:
                 self._resolve_statement(child, scope)
             return
 
@@ -404,6 +413,10 @@ class NameResolver:
             self._resolve_expr(target.index, scope)
             return
         self._error(target, "unsupported delete target")
+
+    @staticmethod
+    def _import_binding_name(statement: ImportStmt) -> str:
+        return statement.alias or statement.module.split(".", 1)[0]
 
     def _error(self, node, message: str) -> None:
         self.errors.error("Semantic", message, node.span.line, node.span.column, node.span.end_line, node.span.end_column)

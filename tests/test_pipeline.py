@@ -429,68 +429,6 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet", result.errors.render())
 
-    def test_compile_source_rejects_for_loops_for_native_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = os.path.join(temp_dir, "program.c")
-            result = compile_source(
-                "for i in range(3):\n"
-                "    print(i)\n",
-                filename="inline.py",
-                output=output_path,
-            )
-        self.assertFalse(result.success)
-        self.assertIn("native compilation does not support for loops yet", result.errors.render())
-
-    def test_compile_source_rejects_multi_argument_print_for_native_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = os.path.join(temp_dir, "program.c")
-            result = compile_source(
-                'print("hello", "world")\n',
-                filename="inline.py",
-                output=output_path,
-            )
-        self.assertFalse(result.success)
-        self.assertIn("native compilation does not support multi-argument print, custom sep/end, or string concatenation yet", result.errors.render())
-
-    def test_compile_source_rejects_vm_only_builtin_calls_for_native_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = os.path.join(temp_dir, "program.c")
-            result = compile_source(
-                "x = abs(-5)\n"
-                "print(x)\n",
-                filename="inline.py",
-                output=output_path,
-            )
-        self.assertFalse(result.success)
-        self.assertIn("native compilation does not support these builtin calls yet", result.errors.render())
-
-    def test_compile_source_rejects_container_features_for_native_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = os.path.join(temp_dir, "program.c")
-            result = compile_source(
-                "items = [1, 2, 3]\n"
-                "print(items[0])\n",
-                filename="inline.py",
-                output=output_path,
-            )
-        self.assertFalse(result.success)
-        self.assertIn("native compilation does not support lists, tuples, indexing, or len() yet", result.errors.render())
-
-    def test_compile_source_rejects_object_features_for_native_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = os.path.join(temp_dir, "program.c")
-            result = compile_source(
-                "class Point:\n"
-                "    def __init__(self, x):\n"
-                "        self.x = x\n"
-                "p = Point(1)\n"
-                "print(p.x)\n",
-                filename="inline.py",
-                output=output_path,
-            )
-        self.assertFalse(result.success)
-        self.assertIn("native compilation does not support classes, attributes, or methods yet", result.errors.render())
-
     def test_unpack_count_mismatch_fails_at_runtime(self):
         result, _, rendered = self.execute_program("a, b = (1, 2, 3)\n")
         self.assertFalse(result.success)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from compiler.core.ast import ClassDef, ForStmt, FunctionDef, IfStmt, Program, ReturnStmt, TryStmt, WhileStmt, BreakStmt, ContinueStmt
+from compiler.core.ast import ClassDef, ForStmt, FunctionDef, IfStmt, Program, ReturnStmt, TryStmt, WhileStmt, BreakStmt, ContinueStmt, WithStmt
 from compiler.core.types import ValueType
 from compiler.semantic.model import SymbolTable
 from compiler.utils.error_handler import ErrorHandler
@@ -42,6 +42,8 @@ class ControlFlowChecker:
                 for handler in statement.handlers:
                     self._check_statements(handler.body, table)
                 self._check_statements(statement.finalbody, table)
+            elif isinstance(statement, WithStmt):
+                self._check_statements(statement.body, table)
             elif isinstance(statement, (BreakStmt, ContinueStmt)):
                 if not getattr(self, "in_loop", 0):
                     name = "break" if isinstance(statement, BreakStmt) else "continue"

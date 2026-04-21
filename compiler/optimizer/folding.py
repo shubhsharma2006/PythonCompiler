@@ -33,6 +33,7 @@ from compiler.core.ast import (
     UnaryExpr,
     UnpackAssignStmt,
     WhileStmt,
+    WithStmt,
 )
 
 
@@ -81,6 +82,9 @@ class ConstantFolder:
             statement.iterator = self._optimize_expr(statement.iterator)
             statement.body = self._optimize_statements(statement.body)
             statement.orelse = self._optimize_statements(statement.orelse)
+        elif isinstance(statement, WithStmt):
+            statement.context_expr = self._optimize_expr(statement.context_expr)
+            statement.body = self._optimize_statements(statement.body)
         elif isinstance(statement, FunctionDef):
             statement.defaults = [self._optimize_expr(default) for default in statement.defaults]
             statement.body = self._optimize_statements(statement.body)

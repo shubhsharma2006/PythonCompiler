@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import importlib
 from typing import Callable
 
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule
@@ -41,6 +42,7 @@ class Frame:
     closure_scopes: list[dict[str, object]] = field(default_factory=list)
     stack: list[object] = field(default_factory=list)
     try_stack: list[TryHandler] = field(default_factory=list)
+    with_stack: list[object] = field(default_factory=list)
     pending_unwind: tuple[str, object] | None = None
     ip: int = 0
 
@@ -256,6 +258,20 @@ class BytecodeInterpreter:
             if kind == "raise":
                 raise RaisedSignal(value)
             raise VMError(f"unknown unwind kind {kind!r}")
+        if op == "WITH_ENTER":
+            context = frame.stack.pop()
+            enter = py_load_attr(context, "__enter__")
+            value = py_invoke_callable(enter, [], frame.module, execute_function=self._execute_function)
+            frame.with_stack.append(context)
+            frame.stack.append(value)
+            return
+        if op == "WITH_EXIT":
+            if not frame.with_stack:
+                raise VMError("with exit without active context")
+            context = frame.with_stack.pop()
+            exit_func = py_load_attr(context, "__exit__")
+            py_invoke_callable(exit_func, [None, None, None], frame.module, execute_function=self._execute_function)
+            return
         if op == "GET_ITER":
             frame.stack.append(iter(frame.stack.pop()))
             return
@@ -390,7 +406,11 @@ class BytecodeInterpreter:
             frame.stack.append(Closure(function=function, closure_scopes=captured_scopes, defaults=defaults))
             return
         if op == "IMPORT_MODULE":
-            frame.stack.append(self._import_module(arg, frame.module.filename))
+            if isinstance(arg, tuple):
+                module_name, bind_root = arg
+            else:
+                module_name, bind_root = arg, False
+            frame.stack.append(self._import_module(module_name, frame.module.filename, bind_root=bool(bind_root)))
             return
         if op == "IMPORT_FROM":
             module_name, export_name = arg
@@ -414,15 +434,33 @@ class BytecodeInterpreter:
 
         raise VMError(f"unsupported opcode {op!r}")
 
-    def _import_module(self, module_name: str, requester_filename: str) -> ModuleObject:
-        if self.module_loader is None:
-            raise VMError(f"cannot import {module_name!r} without a module loader")
-        module = self.module_loader(module_name, requester_filename)
-        if module.filename in self.loading:
-            existing = self.modules.get(module.filename)
-            if existing is not None:
-                return existing
-        return self._execute_module(module)
+    def _import_module(self, module_name: str, requester_filename: str, *, bind_root: bool = False) -> ModuleObject:
+        if self.module_loader is not None:
+            try:
+                module = self.module_loader(module_name, requester_filename)
+            except VMError as exc:
+                if "cannot resolve local module" not in str(exc):
+                    raise
+            else:
+                if module.filename in self.loading:
+                    existing = self.modules.get(module.filename)
+                    if existing is not None:
+                        return existing
+                return self._execute_module(module)
+
+        target_name = module_name.split(".", 1)[0] if bind_root else module_name
+        try:
+            importlib.import_module(module_name)
+            py_module = importlib.import_module(target_name)
+        except ImportError as exc:
+            raise VMError(f"cannot import {module_name!r}: {exc}") from None
+        filename = getattr(py_module, "__file__", None) or f"<builtin:{target_name}>"
+        existing = self.modules.get(filename)
+        if existing is not None:
+            return existing
+        module_object = ModuleObject(name=target_name, filename=filename, namespace=dict(vars(py_module)))
+        self.modules[filename] = module_object
+        return module_object
 
     def _lookup_function(self, module: ModuleObject, function_key: str) -> BytecodeFunction:
         loaded = self.bytecode_modules.get(module.filename)
