@@ -142,6 +142,18 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["7"])
 
+    def test_execute_source_supports_importlib_fallback_for_stdlib(self):
+        result, run_output, rendered = self.execute_program(
+            "import math\n"
+            "from math import sqrt\n"
+            "import os.path\n"
+            "print(math.sqrt(9))\n"
+            "print(sqrt(16))\n"
+            'print(os.path.basename("/tmp/demo.txt"))\n'
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["3.0", "4.0", "demo.txt"])
+
     def test_execute_source_supports_closure_capture(self):
         result, run_output, rendered = self.execute_program(
             "def outer(x):\n"
@@ -285,6 +297,20 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["2", "1", "2", "15"])
 
+    def test_execute_source_supports_with_statement(self):
+        result, run_output, rendered = self.execute_program(
+            "class CM:\n"
+            "    def __enter__(self):\n"
+            "        print(\"enter\")\n"
+            "        return \"body\"\n"
+            "    def __exit__(self, exc_type, exc, tb):\n"
+            "        print(\"exit\")\n"
+            "with CM() as value:\n"
+            "    print(value)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["enter", "body", "exit"])
+
     def test_execute_source_supports_dicts_sets_and_container_methods(self):
         result, run_output, rendered = self.execute_program(
             'd = {"a": 1, "b": 2}\n'
@@ -382,9 +408,88 @@ class PipelineTests(unittest.TestCase):
                     result = compile_source(source, filename="inline.py", output=output_path)
                 self.assertFalse(result.success)
                 self.assertIn(
-                    "native compilation does not support slicing, unpacking assignment, delete, or global/nonlocal yet",
+                    "native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet",
                     result.errors.render(),
                 )
+
+    def test_compile_source_rejects_with_statement_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "class CM:\n"
+                "    def __enter__(self):\n"
+                "        return 1\n"
+                "    def __exit__(self, exc_type, exc, tb):\n"
+                "        pass\n"
+                "with CM() as value:\n"
+                "    print(value)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet", result.errors.render())
+
+    def test_compile_source_rejects_for_loops_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "for i in range(3):\n"
+                "    print(i)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support for loops yet", result.errors.render())
+
+    def test_compile_source_rejects_multi_argument_print_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                'print("hello", "world")\n',
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support multi-argument print, custom sep/end, or string concatenation yet", result.errors.render())
+
+    def test_compile_source_rejects_vm_only_builtin_calls_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "x = abs(-5)\n"
+                "print(x)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support these builtin calls yet", result.errors.render())
+
+    def test_compile_source_rejects_container_features_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "items = [1, 2, 3]\n"
+                "print(items[0])\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support lists, tuples, indexing, or len() yet", result.errors.render())
+
+    def test_compile_source_rejects_object_features_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "class Point:\n"
+                "    def __init__(self, x):\n"
+                "        self.x = x\n"
+                "p = Point(1)\n"
+                "print(p.x)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support classes, attributes, or methods yet", result.errors.render())
 
     def test_unpack_count_mismatch_fails_at_runtime(self):
         result, _, rendered = self.execute_program("a, b = (1, 2, 3)\n")

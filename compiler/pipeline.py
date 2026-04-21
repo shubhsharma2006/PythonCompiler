@@ -36,6 +36,7 @@ from compiler.core.ast import (
     TupleExpr,
     SliceExpr,
     UnpackAssignStmt,
+    WithStmt,
 )
 from compiler.core.types import ValueType
 from compiler.frontend import LexedSource, ParsedModule, lex_source, lower_cst, parse_tokens
@@ -381,7 +382,7 @@ def _expr_uses_slicing(expr) -> bool:
 def _program_uses_core_vm_only_features(program: Program) -> bool:
     def walk(statements: list[object]) -> bool:
         for statement in statements:
-            if isinstance(statement, (UnpackAssignStmt, DeleteStmt, GlobalStmt, NonlocalStmt)):
+            if isinstance(statement, (UnpackAssignStmt, DeleteStmt, GlobalStmt, NonlocalStmt, WithStmt)):
                 return True
             if isinstance(statement, FunctionDef):
                 if any(_expr_uses_slicing(default) for default in statement.defaults) or walk(statement.body):
@@ -401,6 +402,9 @@ def _program_uses_core_vm_only_features(program: Program) -> bool:
                     return True
             elif isinstance(statement, TryStmt):
                 if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers) or walk(statement.finalbody):
+                    return True
+            elif isinstance(statement, WithStmt):
+                if _expr_uses_slicing(statement.context_expr) or walk(statement.body):
                     return True
             elif isinstance(statement, PrintStmt):
                 if any(_expr_uses_slicing(value) for value in statement.values):
@@ -422,12 +426,12 @@ def _program_uses_core_vm_only_features(program: Program) -> bool:
 
 
 VM_ONLY_BUILTIN_CALLS = {
-    "repr", "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
+    "repr", "ascii", "str", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
     "frozenset", "complex", "type", "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
     "callable", "id", "enumerate", "zip", "map", "filter", "reversed", "sorted", "iter", "next", "abs",
     "round", "min", "max", "sum", "pow", "divmod", "hash", "hex", "oct", "bin", "chr", "ord", "format",
     "input", "open", "any", "all", "object", "super", "property", "staticmethod", "classmethod", "vars",
-    "dir",
+    "dir", "len",
 }
 
 
@@ -704,8 +708,12 @@ def compile_source(
         result.errors.error("Codegen", "native compilation does not support exceptions yet")
         result.success = False
         return result
+    if _program_uses_for_loops(result.program):
+        result.errors.error("Codegen", "native compilation does not support for loops yet")
+        result.success = False
+        return result
     if _program_uses_core_vm_only_features(result.program):
-        result.errors.error("Codegen", "native compilation does not support slicing, unpacking assignment, delete, or global/nonlocal yet")
+        result.errors.error("Codegen", "native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet")
         result.success = False
         return result
     if _program_uses_container_features(result.program):
@@ -722,6 +730,10 @@ def compile_source(
         return result
     if _program_uses_vm_only_builtin_calls(result.program):
         result.errors.error("Codegen", "native compilation does not support these builtin calls yet")
+        result.success = False
+        return result
+    if _program_uses_vm_only_print_or_string_features(result.program, result.semantic):
+        result.errors.error("Codegen", "native compilation does not support multi-argument print, custom sep/end, or string concatenation yet")
         result.success = False
         return result
 
