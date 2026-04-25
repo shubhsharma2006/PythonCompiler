@@ -10,10 +10,12 @@ from compiler.core.ast import (
     BoolOpExpr,
     CallExpr,
     ClassDef,
+    Comprehension,
     CompareExpr,
     ConstantExpr,
     DeleteStmt,
     DictExpr,
+    DictCompExpr,
     ExceptHandler,
     ExprStmt,
     ForStmt,
@@ -26,6 +28,7 @@ from compiler.core.ast import (
     IndexExpr,
     LambdaExpr,
     ListExpr,
+    ListCompExpr,
     MethodCallExpr,
     NameExpr,
     NonlocalStmt,
@@ -35,6 +38,7 @@ from compiler.core.ast import (
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SetCompExpr,
     SliceExpr,
     SourceSpan,
     TryStmt,
@@ -217,15 +221,29 @@ class PythonSubsetLowerer:
             if node.returns is not None:
                 self._unsupported(node, "function return annotations are not supported")
                 return None
-            if node.args.posonlyargs or node.args.kwonlyargs or node.args.vararg or node.args.kwarg:
-                self._unsupported(node, "only simple positional parameters are supported")
+            if node.args.posonlyargs:
+                self._unsupported(node, "positional-only parameters are not supported")
                 return None
-            if any(arg.annotation is not None for arg in node.args.args):
+            if any(arg.annotation is not None for arg in node.args.args + node.args.kwonlyargs):
+                self._unsupported(node, "parameter annotations are not supported")
+                return None
+            if node.args.vararg is not None and node.args.vararg.annotation is not None:
+                self._unsupported(node, "parameter annotations are not supported")
+                return None
+            if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
                 self._unsupported(node, "parameter annotations are not supported")
                 return None
             defaults = [self._lower_expr(default) for default in node.args.defaults]
             if any(default is None for default in defaults):
                 return None
+            kwonly_defaults = {}
+            for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
+                if default is None:
+                    continue
+                lowered_default = self._lower_expr(default)
+                if lowered_default is None:
+                    return None
+                kwonly_defaults[arg.arg] = lowered_default
             self._function_depth += 1
             body = self._lower_body(node.body, allow_docstring=True) or []
             self._function_depth -= 1
@@ -235,6 +253,10 @@ class PythonSubsetLowerer:
                 params=[arg.arg for arg in node.args.args],
                 body=body,
                 defaults=defaults,
+                kwonly_params=[arg.arg for arg in node.args.kwonlyargs],
+                kwonly_defaults=kwonly_defaults,
+                vararg=node.args.vararg.arg if node.args.vararg is not None else None,
+                kwarg=node.args.kwarg.arg if node.args.kwarg is not None else None,
             )
 
         if isinstance(node, ast.ClassDef):
@@ -244,21 +266,40 @@ class PythonSubsetLowerer:
             if node.decorator_list:
                 self._unsupported(node, "class decorators are not supported")
                 return None
-            if node.bases or node.keywords:
-                self._unsupported(node, "class inheritance is not supported yet")
+            if node.keywords:
+                self._unsupported(node, "class keywords are not supported yet")
                 return None
+            bases = [self._lower_expr(base) for base in node.bases]
+            if any(base is None for base in bases):
+                return None
+            attributes = []
             methods = []
             for child in node.body:
                 if self._is_docstring(child) or isinstance(child, ast.Pass):
                     continue
+                if isinstance(child, ast.Assign):
+                    lowered = self._lower_statement(child)
+                    if lowered is None:
+                        return None
+                    if not isinstance(lowered, AssignStmt):
+                        self._unsupported(child, "class assignments must target simple names")
+                        return None
+                    attributes.append(lowered)
+                    continue
                 if not isinstance(child, ast.FunctionDef):
-                    self._unsupported(child, "class bodies may only contain methods")
+                    self._unsupported(child, "class bodies may only contain methods or simple assignments")
                     return None
                 lowered = self._lower_statement(child)
                 if lowered is None or not isinstance(lowered, FunctionDef):
                     return None
                 methods.append(lowered)
-            return ClassDef(span=self._span(node), name=node.name, methods=methods)
+            return ClassDef(
+                span=self._span(node),
+                name=node.name,
+                bases=bases,
+                attributes=attributes,
+                methods=methods,
+            )
 
         if isinstance(node, ast.Import):
             lowered = []
@@ -481,6 +522,28 @@ class PythonSubsetLowerer:
                 return None
             return SetExpr(span=self._span(node), elements=elements)
 
+        if isinstance(node, ast.ListComp):
+            element = self._lower_expr(node.elt)
+            generators = self._lower_comprehensions(node.generators)
+            if element is None or generators is None:
+                return None
+            return ListCompExpr(span=self._span(node), element=element, generators=generators)
+
+        if isinstance(node, ast.SetComp):
+            element = self._lower_expr(node.elt)
+            generators = self._lower_comprehensions(node.generators)
+            if element is None or generators is None:
+                return None
+            return SetCompExpr(span=self._span(node), element=element, generators=generators)
+
+        if isinstance(node, ast.DictComp):
+            key = self._lower_expr(node.key)
+            value = self._lower_expr(node.value)
+            generators = self._lower_comprehensions(node.generators)
+            if key is None or value is None or generators is None:
+                return None
+            return DictCompExpr(span=self._span(node), key=key, value=value, generators=generators)
+
         if isinstance(node, ast.Subscript):
             collection = self._lower_expr(node.value)
             if isinstance(node.slice, ast.Slice):
@@ -508,6 +571,18 @@ class PythonSubsetLowerer:
         if isinstance(node, ast.Lambda):
             self._lambda_counter += 1
             name = f"<lambda_{self._lambda_counter}>"
+            if node.args.posonlyargs:
+                self._unsupported(node, "positional-only parameters are not supported")
+                return None
+            if any(arg.annotation is not None for arg in node.args.args + node.args.kwonlyargs):
+                self._unsupported(node, "parameter annotations are not supported")
+                return None
+            if node.args.vararg is not None and node.args.vararg.annotation is not None:
+                self._unsupported(node, "parameter annotations are not supported")
+                return None
+            if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
+                self._unsupported(node, "parameter annotations are not supported")
+                return None
             lowered_body = self._lower_expr(node.body)
             if lowered_body is None:
                 return None
@@ -516,12 +591,24 @@ class PythonSubsetLowerer:
             defaults = [self._lower_expr(d) for d in node.args.defaults]
             if any(d is None for d in defaults):
                 return None
+            kwonly_defaults = {}
+            for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
+                if default is None:
+                    continue
+                lowered_default = self._lower_expr(default)
+                if lowered_default is None:
+                    return None
+                kwonly_defaults[arg.arg] = lowered_default
             func_def = FunctionDef(
                 span=self._span(node),
                 name=name,
                 params=params,
                 body=[return_stmt],
                 defaults=defaults,
+                kwonly_params=[arg.arg for arg in node.args.kwonlyargs],
+                kwonly_defaults=kwonly_defaults,
+                vararg=node.args.vararg.arg if node.args.vararg is not None else None,
+                kwarg=node.args.kwarg.arg if node.args.kwarg is not None else None,
             )
             return LambdaExpr(span=self._span(node), func_def=func_def)
 
@@ -539,6 +626,31 @@ class PythonSubsetLowerer:
         ):
             return None
         return SliceExpr(span=self._span(node), lower=lower, upper=upper, step=step)
+
+    def _lower_comprehensions(self, generators: list[ast.comprehension]) -> list[Comprehension] | None:
+        lowered: list[Comprehension] = []
+        for generator in generators:
+            if generator.is_async:
+                self._unsupported(generator, "async comprehensions are not supported yet")
+                return None
+            if not isinstance(generator.target, ast.Name):
+                self._unsupported(generator.target, "only simple name comprehension targets are supported")
+                return None
+            iterator = self._lower_expr(generator.iter)
+            if iterator is None:
+                return None
+            ifs = [self._lower_expr(condition) for condition in generator.ifs]
+            if any(condition is None for condition in ifs):
+                return None
+            lowered.append(
+                Comprehension(
+                    span=self._span(generator),
+                    target=generator.target.id,
+                    iterator=iterator,
+                    ifs=ifs,
+                )
+            )
+        return lowered
 
     def _lower_delete_target(self, node: ast.expr):
         if isinstance(node, ast.Name):

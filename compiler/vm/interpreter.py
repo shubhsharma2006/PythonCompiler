@@ -13,9 +13,12 @@ from compiler.vm.objects import (
     InstanceObject,
     ModuleObject,
     BoundMethod,
+    SuperObject,
     py_binary_op,
+    class_is_subclass,
     py_compare_op,
     py_index_get,
+    py_index_set,
     py_invoke_callable,
     py_load_attr,
     py_matches_exception,
@@ -80,7 +83,7 @@ class BytecodeInterpreter:
         self.modules[module.filename] = module_object
         self.loading.add(module.filename)
         try:
-            self._execute_function(module.entrypoint, [], module_object)
+            self._execute_function(module.entrypoint, {}, module_object)
         finally:
             self.loading.discard(module.filename)
         return module_object
@@ -88,12 +91,12 @@ class BytecodeInterpreter:
     def _execute_function(
         self,
         function: BytecodeFunction,
-        args: list[object],
+        bound_args: dict[str, object],
         module: ModuleObject,
         closure_scopes: list[dict[str, object]] | None = None,
     ):
         frame = Frame(module=module, function=function, globals=module.namespace, closure_scopes=list(closure_scopes or []))
-        frame.locals.update(zip(function.params, args))
+        frame.locals.update(bound_args)
         try:
             while frame.ip < len(function.instructions):
                 self._current_frame = frame
@@ -228,11 +231,19 @@ class BytecodeInterpreter:
                 frame.stack.append(value)
             return
         if op == "BUILD_CLASS":
-            class_name, method_specs = arg
+            class_name, method_specs, base_count, attribute_names = arg
+            attribute_values = [frame.stack.pop() for _ in range(len(attribute_names))]
+            attribute_values.reverse()
+            bases = [frame.stack.pop() for _ in range(base_count)]
+            bases.reverse()
             methods: dict[str, BytecodeFunction] = {}
             for method_name, function_key in method_specs:
                 methods[method_name] = self._lookup_function(frame.module, function_key)
-            frame.stack.append(ClassObject(name=class_name, methods=methods))
+            for base in bases:
+                if not isinstance(base, ClassObject):
+                    raise VMError(f"class {class_name!r} base must be a class")
+            attributes = dict(zip(attribute_names, attribute_values))
+            frame.stack.append(ClassObject(name=class_name, methods=methods, bases=bases, attributes=attributes))
             return
         if op == "TRY_FINALLY":
             frame.try_stack.append(TryHandler(kind="finally", target=int(arg), stack_depth=len(frame.stack)))
@@ -270,6 +281,18 @@ class BytecodeInterpreter:
                 raise VMError("with exit without active context")
             context = frame.with_stack.pop()
             exit_func = py_load_attr(context, "__exit__")
+            if frame.pending_unwind is not None and frame.pending_unwind[0] == "raise":
+                exc_value = frame.pending_unwind[1]
+                exc_type = self._exception_type(exc_value)
+                handled = py_invoke_callable(
+                    exit_func,
+                    [exc_type, exc_value, None],
+                    frame.module,
+                    execute_function=self._execute_function,
+                )
+                if py_truthy(handled):
+                    frame.pending_unwind = None
+                return
             py_invoke_callable(exit_func, [None, None, None], frame.module, execute_function=self._execute_function)
             return
         if op == "GET_ITER":
@@ -295,6 +318,12 @@ class BytecodeInterpreter:
                 del collection[index]
             except (IndexError, KeyError, TypeError) as exc:
                 raise VMError(str(exc)) from None
+            return
+        if op == "STORE_SUBSCR":
+            value = frame.stack.pop()
+            index = frame.stack.pop()
+            collection = frame.stack.pop()
+            py_index_set(collection, index, value)
             return
         if op == "LOAD_ATTR":
             obj = frame.stack.pop()
@@ -398,12 +427,22 @@ class BytecodeInterpreter:
             )
             return
         if op == "MAKE_FUNCTION":
-            function_key, n_defaults = arg
+            function_key, n_defaults, kwonly_default_names = arg
             function = self._lookup_function(frame.module, function_key)
+            kwonly_values = [frame.stack.pop() for _ in range(len(kwonly_default_names))]
+            kwonly_values.reverse()
+            kwonly_defaults = dict(zip(kwonly_default_names, kwonly_values))
             defaults = [frame.stack.pop() for _ in range(n_defaults)]
             defaults.reverse()
             captured_scopes = [frame.locals, *frame.closure_scopes]
-            frame.stack.append(Closure(function=function, closure_scopes=captured_scopes, defaults=defaults))
+            frame.stack.append(
+                Closure(
+                    function=function,
+                    closure_scopes=captured_scopes,
+                    defaults=defaults,
+                    kwonly_defaults=kwonly_defaults,
+                )
+            )
             return
         if op == "IMPORT_MODULE":
             if isinstance(arg, tuple):
@@ -416,7 +455,12 @@ class BytecodeInterpreter:
             module_name, export_name = arg
             module_object = self._import_module(module_name, frame.module.filename)
             if export_name not in module_object.namespace:
-                raise VMError(f"module {module_name!r} has no attribute {export_name!r}")
+                try:
+                    submodule = self._import_module(f"{module_name}.{export_name}", frame.module.filename)
+                except VMError:
+                    raise VMError(f"module {module_name!r} has no attribute {export_name!r}") from None
+                frame.stack.append(submodule)
+                return
             frame.stack.append(module_object.namespace[export_name])
             return
         if op == "PRINT":
@@ -446,7 +490,14 @@ class BytecodeInterpreter:
                     existing = self.modules.get(module.filename)
                     if existing is not None:
                         return existing
-                return self._execute_module(module)
+                module_object = self._execute_module(module)
+                if "." in module_name:
+                    parent_name, child_name = module_name.rsplit(".", 1)
+                    parent_module = self._import_module(parent_name, requester_filename)
+                    parent_module.namespace[child_name] = module_object
+                    if bind_root:
+                        return self._import_module(module_name.split(".", 1)[0], requester_filename)
+                return module_object
 
         target_name = module_name.split(".", 1)[0] if bind_root else module_name
         try:
@@ -473,7 +524,7 @@ class BytecodeInterpreter:
             handler = frame.try_stack.pop()
             if handler.kind == "except":
                 for target, type_name, bind_name in handler.handlers:
-                    if not py_matches_exception(signal.value, type_name):
+                    if not py_matches_exception(signal.value, self._resolve_exception_type(frame, type_name)):
                         continue
                     del frame.stack[handler.stack_depth:]
                     if bind_name is not None:
@@ -505,6 +556,24 @@ class BytecodeInterpreter:
     def _invoke_callable(self, callable_obj, args: list[object], module: ModuleObject):
         return py_invoke_callable(callable_obj, args, module, execute_function=self._execute_function)
 
+    def _resolve_exception_type(self, frame: Frame, type_name: str | None):
+        if type_name is None:
+            return None
+        if type_name in frame.locals:
+            return frame.locals[type_name]
+        for scope in frame.closure_scopes:
+            if type_name in scope:
+                return scope[type_name]
+        if type_name in frame.globals:
+            return frame.globals[type_name]
+        return self.builtins.get(type_name, type_name)
+
+    @staticmethod
+    def _exception_type(value):
+        if isinstance(value, InstanceObject):
+            return value.class_object
+        return type(value)
+
     def format_value(self, value) -> str:
         return repr(value) if isinstance(value, float) else str(value)
 
@@ -515,3 +584,31 @@ class BytecodeInterpreter:
         if self._current_frame is None:
             return {}
         return dict(self._current_frame.locals)
+
+    def build_super(self, *args):
+        frame = self._current_frame
+        if frame is None:
+            raise VMError("super() called without an active frame")
+        if len(args) == 0:
+            owner_class_name = frame.function.owner_class_name
+            if owner_class_name is None or not frame.function.params:
+                raise VMError("super() is only supported inside instance methods")
+            owner_class = frame.globals.get(owner_class_name)
+            if not isinstance(owner_class, ClassObject):
+                raise VMError(f"super() could not resolve class {owner_class_name!r}")
+            instance = frame.locals.get(frame.function.params[0])
+            if not isinstance(instance, InstanceObject):
+                raise VMError("super() requires an instance as the first method argument")
+            if not class_is_subclass(instance.class_object, owner_class):
+                raise VMError("super() instance is not compatible with the current class")
+            return SuperObject(owner_class=owner_class, instance=instance)
+        if len(args) != 2:
+            raise VMError("super() expects 0 or 2 arguments")
+        owner_class, instance = args
+        if not isinstance(owner_class, ClassObject):
+            raise VMError("super() arg 1 must be a class")
+        if not isinstance(instance, InstanceObject):
+            raise VMError("super() arg 2 must be an instance")
+        if not class_is_subclass(instance.class_object, owner_class):
+            raise VMError("super() instance is not compatible with the provided class")
+        return SuperObject(owner_class=owner_class, instance=instance)

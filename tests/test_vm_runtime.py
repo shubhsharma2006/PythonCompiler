@@ -14,6 +14,7 @@ from compiler.vm.objects import (
     py_compare_op,
     py_index_get,
     py_load_attr,
+    py_matches_exception,
     py_store_attr,
     py_truthy,
     unwrap_runtime_value,
@@ -34,6 +35,9 @@ class _Host:
 
     def current_locals(self) -> dict[str, object]:
         return dict(self._locals)
+
+    def build_super(self, *args) -> object:
+        return args
 
 
 class VMRuntimeTests(unittest.TestCase):
@@ -62,6 +66,18 @@ class VMRuntimeTests(unittest.TestCase):
         py_store_attr(module, "answer", 42)
         self.assertEqual(py_load_attr(module, "answer"), 42)
 
+    def test_runtime_attribute_helpers_support_class_attributes_and_inheritance(self):
+        base_method = BytecodeFunction(key="Base.greet", name="greet", params=["self"])
+        base = ClassObject(name="Base", methods={"greet": base_method}, attributes={"kind": "base"})
+        child = ClassObject(name="Child", methods={}, bases=[base], attributes={"label": "child"})
+        instance = InstanceObject(class_object=child)
+        self.assertEqual(py_load_attr(instance, "kind"), "base")
+        self.assertEqual(py_load_attr(child, "kind"), "base")
+        self.assertEqual(py_load_attr(child, "label"), "child")
+        bound = py_load_attr(instance, "greet")
+        self.assertEqual(bound.instance, instance)
+        self.assertEqual(bound.function, base_method)
+
     def test_builtin_registry_is_hosted_outside_interpreter(self):
         host = _Host()
         builtins = build_builtins(host)
@@ -78,11 +94,41 @@ class VMRuntimeTests(unittest.TestCase):
 
     def test_bind_function_args_applies_defaults_and_keywords(self):
         args = bind_function_args("combine", ["a", "b", "c"], [3], [1], {"b": 2})
-        self.assertEqual(args, [1, 2, 3])
+        self.assertEqual(args, {"a": 1, "b": 2, "c": 3})
 
     def test_bind_function_args_rejects_duplicate_keyword(self):
         with self.assertRaisesRegex(VMError, "multiple values"):
             bind_function_args("combine", ["a", "b"], [], [1], {"a": 2})
+
+    def test_bind_function_args_supports_varargs_kwargs_and_kwonly(self):
+        args = bind_function_args(
+            "collect",
+            ["a"],
+            [],
+            [1, 2, 3],
+            {"flag": True, "extra": 9},
+            kwonly_params=["flag"],
+            kwonly_defaults={},
+            vararg_name="rest",
+            kwarg_name="named",
+        )
+        self.assertEqual(args["a"], 1)
+        self.assertEqual(args["rest"], (2, 3))
+        self.assertEqual(args["flag"], True)
+        self.assertEqual(args["named"], {"extra": 9})
+
+    def test_py_matches_exception_supports_host_exception_hierarchy(self):
+        self.assertTrue(py_matches_exception(ValueError("boom"), Exception))
+        self.assertTrue(py_matches_exception(ValueError("boom"), ValueError))
+        self.assertFalse(py_matches_exception(ValueError("boom"), KeyError))
+
+    def test_py_matches_exception_supports_custom_class_hierarchy(self):
+        base = ClassObject(name="BaseError", methods={})
+        child = ClassObject(name="ChildError", methods={}, bases=[base])
+        err = InstanceObject(class_object=child)
+        self.assertTrue(py_matches_exception(err, base))
+        self.assertTrue(py_matches_exception(err, "BaseError"))
+        self.assertFalse(py_matches_exception(err, "OtherError"))
 
 
 if __name__ == "__main__":

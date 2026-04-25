@@ -17,6 +17,11 @@ class BytecodeFunction:
     key: str
     name: str
     params: list[str]
+    owner_class_name: str | None = None
+    kwonly_params: list[str] = field(default_factory=list)
+    kwonly_defaults: dict[str, object] = field(default_factory=dict)
+    vararg_name: str | None = None
+    kwarg_name: str | None = None
     instructions: list[Instruction] = field(default_factory=list)
     defaults: list[object] = field(default_factory=list)
     global_names: set[str] = field(default_factory=set)

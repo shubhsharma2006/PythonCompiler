@@ -52,11 +52,17 @@ class FunctionDef(Statement):
     params: list[str]
     body: list[Statement]
     defaults: list[Expression] = field(default_factory=list)
+    kwonly_params: list[str] = field(default_factory=list)
+    kwonly_defaults: dict[str, Expression] = field(default_factory=dict)
+    vararg: str | None = None
+    kwarg: str | None = None
 
 
 @dataclass
 class ClassDef(Statement):
     name: str
+    bases: list[Expression]
+    attributes: list[AssignStmt]
     methods: list[FunctionDef]
 
 
@@ -249,6 +255,32 @@ class DictExpr(Expression):
 @dataclass
 class SetExpr(Expression):
     elements: list[Expression]
+
+
+@dataclass
+class Comprehension(Node):
+    target: str
+    iterator: Expression
+    ifs: list[Expression]
+
+
+@dataclass
+class ListCompExpr(Expression):
+    element: Expression
+    generators: list[Comprehension]
+
+
+@dataclass
+class SetCompExpr(Expression):
+    element: Expression
+    generators: list[Comprehension]
+
+
+@dataclass
+class DictCompExpr(Expression):
+    key: Expression
+    value: Expression
+    generators: list[Comprehension]
 
 
 @dataclass

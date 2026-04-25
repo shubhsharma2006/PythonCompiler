@@ -9,11 +9,13 @@ from compiler.core.ast import (
     BreakStmt,
     CallExpr,
     ClassDef,
+    Comprehension,
     CompareExpr,
     ConstantExpr,
     ContinueStmt,
     DeleteStmt,
     DictExpr,
+    DictCompExpr,
     ExprStmt,
     ForStmt,
     FromImportStmt,
@@ -25,6 +27,7 @@ from compiler.core.ast import (
     IndexExpr,
     LambdaExpr,
     ListExpr,
+    ListCompExpr,
     MethodCallExpr,
     NameExpr,
     NonlocalStmt,
@@ -34,6 +37,7 @@ from compiler.core.ast import (
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SetCompExpr,
     SliceExpr,
     TryStmt,
     TupleExpr,
@@ -51,6 +55,7 @@ class BytecodeLowerer:
     def __init__(self) -> None:
         self.label_counter = 0
         self.function_counter = 0
+        self.temp_counter = 0
         self.functions: dict[str, BytecodeFunction] = {}
         self.loop_stack: list[tuple[str, str]] = []
         self.scope_stack: list[tuple[set[str], set[str]]] = []
@@ -73,11 +78,19 @@ class BytecodeLowerer:
             entrypoint=entry,
         )
 
-    def _lower_function(self, function: FunctionDef, *, parent_key: str) -> BytecodeFunction:
+    def _lower_function(self, function: FunctionDef, *, parent_key: str, owner_class_name: str | None = None) -> BytecodeFunction:
         function_key = self._new_function_key(parent_key, function.name)
         lowered = self._lower_body(function.name, function.params, function.body, parent_key=function_key)
         lowered.key = function_key
+        lowered.owner_class_name = owner_class_name
         lowered.defaults = [self._literal_default(default) for default in function.defaults]
+        lowered.kwonly_params = list(function.kwonly_params)
+        lowered.kwonly_defaults = {
+            name: self._literal_default(default)
+            for name, default in function.kwonly_defaults.items()
+        }
+        lowered.vararg_name = function.vararg
+        lowered.kwarg_name = function.kwarg
         self.functions[function_key] = lowered
         return lowered
 
@@ -106,7 +119,10 @@ class BytecodeLowerer:
             lowered = self._lower_function(statement, parent_key=parent_key)
             for default in statement.defaults:
                 self._emit_expr(default, instructions)
-            instructions.append(Instruction("MAKE_FUNCTION", (lowered.key, len(statement.defaults))))
+            kwonly_default_names = [name for name in statement.kwonly_params if name in statement.kwonly_defaults]
+            for name in kwonly_default_names:
+                self._emit_expr(statement.kwonly_defaults[name], instructions)
+            instructions.append(Instruction("MAKE_FUNCTION", (lowered.key, len(statement.defaults), kwonly_default_names)))
             self._emit_store_name(statement.name, instructions)
             return
 
@@ -114,9 +130,15 @@ class BytecodeLowerer:
             method_specs = []
             class_parent = self._new_function_key(parent_key, statement.name)
             for method in statement.methods:
-                lowered = self._lower_function(method, parent_key=class_parent)
+                lowered = self._lower_function(method, parent_key=class_parent, owner_class_name=statement.name)
                 method_specs.append((method.name, lowered.key))
-            instructions.append(Instruction("BUILD_CLASS", (statement.name, method_specs)))
+            for base in statement.bases:
+                self._emit_expr(base, instructions, parent_key)
+            attribute_names = []
+            for attribute in statement.attributes:
+                self._emit_expr(attribute.value, instructions, parent_key)
+                attribute_names.append(attribute.name)
+            instructions.append(Instruction("BUILD_CLASS", (statement.name, method_specs, len(statement.bases), attribute_names)))
             self._emit_store_name(statement.name, instructions)
             return
 
@@ -323,24 +345,34 @@ class BytecodeLowerer:
                 self._emit_expr(statement.value, instructions, parent_key)
             instructions.append(Instruction("RETURN_VALUE"))
 
-    def _emit_expr(self, expr, instructions: list[Instruction], parent_key: str = "<module>") -> None:
+    def _emit_expr(
+        self,
+        expr,
+        instructions: list[Instruction],
+        parent_key: str = "<module>",
+        name_bindings: dict[str, str] | None = None,
+    ) -> None:
+        name_bindings = name_bindings or {}
         if isinstance(expr, IfExpr):
             else_label = self._new_label("ifexpr_else")
             end_label = self._new_label("ifexpr_end")
-            self._emit_expr(expr.condition, instructions, parent_key)
+            self._emit_expr(expr.condition, instructions, parent_key, name_bindings)
             instructions.append(Instruction("JUMP_IF_FALSE", else_label))
-            self._emit_expr(expr.body, instructions, parent_key)
+            self._emit_expr(expr.body, instructions, parent_key, name_bindings)
             instructions.append(Instruction("JUMP", end_label))
             instructions.append(Instruction("LABEL", else_label))
-            self._emit_expr(expr.orelse, instructions, parent_key)
+            self._emit_expr(expr.orelse, instructions, parent_key, name_bindings)
             instructions.append(Instruction("LABEL", end_label))
             return
 
         if isinstance(expr, LambdaExpr):
             lowered = self._lower_function(expr.func_def, parent_key=parent_key or "<lambda>")
             for default in expr.func_def.defaults:
-                self._emit_expr(default, instructions, parent_key)
-            instructions.append(Instruction("MAKE_FUNCTION", (lowered.key, len(expr.func_def.defaults))))
+                self._emit_expr(default, instructions, parent_key, name_bindings)
+            kwonly_default_names = [name for name in expr.func_def.kwonly_params if name in expr.func_def.kwonly_defaults]
+            for name in kwonly_default_names:
+                self._emit_expr(expr.func_def.kwonly_defaults[name], instructions, parent_key, name_bindings)
+            instructions.append(Instruction("MAKE_FUNCTION", (lowered.key, len(expr.func_def.defaults), kwonly_default_names)))
             return
 
         if isinstance(expr, ConstantExpr):
@@ -348,40 +380,40 @@ class BytecodeLowerer:
             return
 
         if isinstance(expr, NameExpr):
-            self._emit_load_name(expr.name, instructions)
+            self._emit_load_name(name_bindings.get(expr.name, expr.name), instructions)
             return
 
         if isinstance(expr, BinaryExpr):
-            self._emit_expr(expr.left, instructions, parent_key)
-            self._emit_expr(expr.right, instructions, parent_key)
+            self._emit_expr(expr.left, instructions, parent_key, name_bindings)
+            self._emit_expr(expr.right, instructions, parent_key, name_bindings)
             instructions.append(Instruction("BINARY_OP", expr.op))
             return
 
         if isinstance(expr, CompareExpr):
-            self._emit_expr(expr.left, instructions, parent_key)
-            self._emit_expr(expr.right, instructions, parent_key)
+            self._emit_expr(expr.left, instructions, parent_key, name_bindings)
+            self._emit_expr(expr.right, instructions, parent_key, name_bindings)
             instructions.append(Instruction("COMPARE_OP", expr.op))
             return
 
         if isinstance(expr, UnaryExpr):
-            self._emit_expr(expr.operand, instructions, parent_key)
+            self._emit_expr(expr.operand, instructions, parent_key, name_bindings)
             instructions.append(Instruction("UNARY_OP", expr.op))
             return
 
         if isinstance(expr, BoolOpExpr):
             end_label = self._new_label("bool_end")
             short_label = self._new_label("bool_short")
-            self._emit_expr(expr.left, instructions, parent_key)
+            self._emit_expr(expr.left, instructions, parent_key, name_bindings)
             if expr.op == "and":
                 instructions.append(Instruction("JUMP_IF_FALSE", short_label))
-                self._emit_expr(expr.right, instructions, parent_key)
+                self._emit_expr(expr.right, instructions, parent_key, name_bindings)
                 instructions.append(Instruction("TO_BOOL"))
                 instructions.append(Instruction("JUMP", end_label))
                 instructions.append(Instruction("LABEL", short_label))
                 instructions.append(Instruction("LOAD_CONST", False))
             else:
                 instructions.append(Instruction("JUMP_IF_TRUE", short_label))
-                self._emit_expr(expr.right, instructions, parent_key)
+                self._emit_expr(expr.right, instructions, parent_key, name_bindings)
                 instructions.append(Instruction("TO_BOOL"))
                 instructions.append(Instruction("JUMP", end_label))
                 instructions.append(Instruction("LABEL", short_label))
@@ -391,74 +423,117 @@ class BytecodeLowerer:
 
         if isinstance(expr, CallExpr):
             for arg in expr.args:
-                self._emit_expr(arg, instructions, parent_key)
+                self._emit_expr(arg, instructions, parent_key, name_bindings)
+            callee_name = name_bindings.get(expr.func_name, expr.func_name)
             if expr.kwargs:
                 for kw_arg in expr.kwargs.values():
-                    self._emit_expr(kw_arg, instructions, parent_key)
-                instructions.append(Instruction("CALL_FUNCTION_KW", (expr.func_name, len(expr.args), list(expr.kwargs.keys()))))
+                    self._emit_expr(kw_arg, instructions, parent_key, name_bindings)
+                instructions.append(Instruction("CALL_FUNCTION_KW", (callee_name, len(expr.args), list(expr.kwargs.keys()))))
             else:
-                instructions.append(Instruction("CALL_FUNCTION", (expr.func_name, len(expr.args))))
+                instructions.append(Instruction("CALL_FUNCTION", (callee_name, len(expr.args))))
             return
 
         if isinstance(expr, ListExpr):
             for element in expr.elements:
-                self._emit_expr(element, instructions, parent_key)
+                self._emit_expr(element, instructions, parent_key, name_bindings)
             instructions.append(Instruction("BUILD_LIST", len(expr.elements)))
             return
 
         if isinstance(expr, TupleExpr):
             for element in expr.elements:
-                self._emit_expr(element, instructions, parent_key)
+                self._emit_expr(element, instructions, parent_key, name_bindings)
             instructions.append(Instruction("BUILD_TUPLE", len(expr.elements)))
             return
 
         if isinstance(expr, DictExpr):
             for key, value in zip(expr.keys, expr.values):
-                self._emit_expr(key, instructions, parent_key)
-                self._emit_expr(value, instructions, parent_key)
+                self._emit_expr(key, instructions, parent_key, name_bindings)
+                self._emit_expr(value, instructions, parent_key, name_bindings)
             instructions.append(Instruction("BUILD_MAP", len(expr.keys)))
             return
 
         if isinstance(expr, SetExpr):
             for element in expr.elements:
-                self._emit_expr(element, instructions, parent_key)
+                self._emit_expr(element, instructions, parent_key, name_bindings)
             instructions.append(Instruction("BUILD_SET", len(expr.elements)))
+            return
+
+        if isinstance(expr, ListCompExpr):
+            result_name = self._new_temp("listcomp")
+            instructions.append(Instruction("BUILD_LIST", 0))
+            instructions.append(Instruction("STORE_NAME", result_name))
+            self._emit_comprehension(
+                expr.generators,
+                instructions,
+                parent_key,
+                lambda bindings: self._emit_list_comp_append(expr.element, result_name, instructions, parent_key, bindings),
+            )
+            self._emit_load_name(result_name, instructions)
+            instructions.append(Instruction("DELETE_NAME", result_name))
+            return
+
+        if isinstance(expr, SetCompExpr):
+            result_name = self._new_temp("setcomp")
+            instructions.append(Instruction("BUILD_SET", 0))
+            instructions.append(Instruction("STORE_NAME", result_name))
+            self._emit_comprehension(
+                expr.generators,
+                instructions,
+                parent_key,
+                lambda bindings: self._emit_set_comp_add(expr.element, result_name, instructions, parent_key, bindings),
+            )
+            self._emit_load_name(result_name, instructions)
+            instructions.append(Instruction("DELETE_NAME", result_name))
+            return
+
+        if isinstance(expr, DictCompExpr):
+            result_name = self._new_temp("dictcomp")
+            instructions.append(Instruction("BUILD_MAP", 0))
+            instructions.append(Instruction("STORE_NAME", result_name))
+            self._emit_comprehension(
+                expr.generators,
+                instructions,
+                parent_key,
+                lambda bindings: self._emit_dict_comp_store(expr, result_name, instructions, parent_key, bindings),
+            )
+            self._emit_load_name(result_name, instructions)
+            instructions.append(Instruction("DELETE_NAME", result_name))
             return
 
         if isinstance(expr, SliceExpr):
             if expr.lower is None:
                 instructions.append(Instruction("LOAD_CONST", None))
             else:
-                self._emit_expr(expr.lower, instructions, parent_key)
+                self._emit_expr(expr.lower, instructions, parent_key, name_bindings)
             if expr.upper is None:
                 instructions.append(Instruction("LOAD_CONST", None))
             else:
-                self._emit_expr(expr.upper, instructions, parent_key)
+                self._emit_expr(expr.upper, instructions, parent_key, name_bindings)
             if expr.step is None:
                 instructions.append(Instruction("BUILD_SLICE", 2))
             else:
-                self._emit_expr(expr.step, instructions, parent_key)
+                self._emit_expr(expr.step, instructions, parent_key, name_bindings)
                 instructions.append(Instruction("BUILD_SLICE", 3))
             return
 
         if isinstance(expr, IndexExpr):
-            self._emit_expr(expr.collection, instructions, parent_key)
-            self._emit_expr(expr.index, instructions, parent_key)
+            self._emit_expr(expr.collection, instructions, parent_key, name_bindings)
+            self._emit_expr(expr.index, instructions, parent_key, name_bindings)
             instructions.append(Instruction("BINARY_SUBSCR"))
             return
 
         if isinstance(expr, AttributeExpr):
-            self._emit_expr(expr.object, instructions, parent_key)
+            self._emit_expr(expr.object, instructions, parent_key, name_bindings)
             instructions.append(Instruction("LOAD_ATTR", expr.attr_name))
             return
 
         if isinstance(expr, MethodCallExpr):
-            self._emit_expr(expr.object, instructions, parent_key)
+            self._emit_expr(expr.object, instructions, parent_key, name_bindings)
             for arg in expr.args:
-                self._emit_expr(arg, instructions, parent_key)
+                self._emit_expr(arg, instructions, parent_key, name_bindings)
             if expr.kwargs:
                 for kw_arg in expr.kwargs.values():
-                    self._emit_expr(kw_arg, instructions, parent_key)
+                    self._emit_expr(kw_arg, instructions, parent_key, name_bindings)
                 instructions.append(Instruction("CALL_METHOD_KW", (expr.method_name, len(expr.args), list(expr.kwargs.keys()))))
             else:
                 instructions.append(Instruction("CALL_METHOD", (expr.method_name, len(expr.args))))
@@ -500,6 +575,69 @@ class BytecodeLowerer:
 
     def _declares_nonlocal(self, name: str) -> bool:
         return bool(self.scope_stack and name in self.scope_stack[-1][1])
+
+    def _emit_comprehension(
+        self,
+        generators: list[Comprehension],
+        instructions: list[Instruction],
+        parent_key: str,
+        emit_body,
+        *,
+        depth: int = 0,
+        name_bindings: dict[str, str] | None = None,
+    ) -> None:
+        name_bindings = dict(name_bindings or {})
+        generator = generators[depth]
+        loop_target = self._new_temp(generator.target)
+        continue_label = self._new_label("comp_continue")
+        end_label = self._new_label("comp_end")
+        self._emit_expr(generator.iterator, instructions, parent_key, name_bindings)
+        instructions.append(Instruction("GET_ITER"))
+        instructions.append(Instruction("LABEL", continue_label))
+        instructions.append(Instruction("FOR_ITER", end_label))
+        instructions.append(Instruction("STORE_NAME", loop_target))
+        next_bindings = dict(name_bindings)
+        next_bindings[generator.target] = loop_target
+        skip_label = self._new_label("comp_skip")
+        for condition in generator.ifs:
+            self._emit_expr(condition, instructions, parent_key, next_bindings)
+            instructions.append(Instruction("JUMP_IF_FALSE", skip_label))
+        if depth + 1 < len(generators):
+            self._emit_comprehension(
+                generators,
+                instructions,
+                parent_key,
+                emit_body,
+                depth=depth + 1,
+                name_bindings=next_bindings,
+            )
+        else:
+            emit_body(next_bindings)
+        instructions.append(Instruction("LABEL", skip_label))
+        instructions.append(Instruction("JUMP", continue_label))
+        instructions.append(Instruction("LABEL", end_label))
+
+    def _emit_list_comp_append(self, element, result_name: str, instructions: list[Instruction], parent_key: str, name_bindings: dict[str, str]) -> None:
+        self._emit_load_name(result_name, instructions)
+        self._emit_expr(element, instructions, parent_key, name_bindings)
+        instructions.append(Instruction("CALL_METHOD", ("append", 1)))
+        instructions.append(Instruction("POP_TOP"))
+
+    def _emit_set_comp_add(self, element, result_name: str, instructions: list[Instruction], parent_key: str, name_bindings: dict[str, str]) -> None:
+        self._emit_load_name(result_name, instructions)
+        self._emit_expr(element, instructions, parent_key, name_bindings)
+        instructions.append(Instruction("CALL_METHOD", ("add", 1)))
+        instructions.append(Instruction("POP_TOP"))
+
+    def _emit_dict_comp_store(self, expr: DictCompExpr, result_name: str, instructions: list[Instruction], parent_key: str, name_bindings: dict[str, str]) -> None:
+        self._emit_load_name(result_name, instructions)
+        self._emit_expr(expr.key, instructions, parent_key, name_bindings)
+        self._emit_expr(expr.value, instructions, parent_key, name_bindings)
+        instructions.append(Instruction("STORE_SUBSCR"))
+
+    def _new_temp(self, prefix: str) -> str:
+        self.temp_counter += 1
+        return f"__{prefix}_{self.temp_counter}"
 
     @staticmethod
     def _import_binding_name(statement: ImportStmt) -> str:

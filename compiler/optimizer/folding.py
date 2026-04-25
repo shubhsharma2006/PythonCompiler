@@ -8,8 +8,10 @@ from compiler.core.ast import (
     BoolOpExpr,
     CallExpr,
     CompareExpr,
+    Comprehension,
     ConstantExpr,
     DeleteStmt,
+    DictCompExpr,
     ExprStmt,
     ClassDef,
     FunctionDef,
@@ -21,6 +23,7 @@ from compiler.core.ast import (
     DictExpr,
     LambdaExpr,
     ListExpr,
+    ListCompExpr,
     MethodCallExpr,
     NonlocalStmt,
     PassStmt,
@@ -28,6 +31,7 @@ from compiler.core.ast import (
     Program,
     ReturnStmt,
     SetExpr,
+    SetCompExpr,
     SliceExpr,
     TupleExpr,
     UnaryExpr,
@@ -89,6 +93,9 @@ class ConstantFolder:
             statement.defaults = [self._optimize_expr(default) for default in statement.defaults]
             statement.body = self._optimize_statements(statement.body)
         elif isinstance(statement, ClassDef):
+            statement.bases = [self._optimize_expr(base) for base in statement.bases]
+            for attribute in statement.attributes:
+                attribute.value = self._optimize_expr(attribute.value)
             for method in statement.methods:
                 method.defaults = [self._optimize_expr(default) for default in method.defaults]
                 method.body = self._optimize_statements(method.body)
@@ -174,6 +181,22 @@ class ConstantFolder:
             expr.elements = [self._optimize_expr(element) for element in expr.elements]
             return expr
 
+        if isinstance(expr, ListCompExpr):
+            expr.element = self._optimize_expr(expr.element)
+            expr.generators = [self._optimize_comprehension(generator) for generator in expr.generators]
+            return expr
+
+        if isinstance(expr, SetCompExpr):
+            expr.element = self._optimize_expr(expr.element)
+            expr.generators = [self._optimize_comprehension(generator) for generator in expr.generators]
+            return expr
+
+        if isinstance(expr, DictCompExpr):
+            expr.key = self._optimize_expr(expr.key)
+            expr.value = self._optimize_expr(expr.value)
+            expr.generators = [self._optimize_comprehension(generator) for generator in expr.generators]
+            return expr
+
         if isinstance(expr, IfExpr):
             expr.condition = self._optimize_expr(expr.condition)
             expr.body = self._optimize_expr(expr.body)
@@ -216,3 +239,8 @@ class ConstantFolder:
             return expr
 
         return expr
+
+    def _optimize_comprehension(self, generator: Comprehension) -> Comprehension:
+        generator.iterator = self._optimize_expr(generator.iterator)
+        generator.ifs = [self._optimize_expr(condition) for condition in generator.ifs]
+        return generator

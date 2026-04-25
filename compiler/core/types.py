@@ -23,6 +23,11 @@ class FunctionType:
     param_names: list[str]
     param_types: list[ValueType]
     defaults_count: int = 0
+    kwonly_names: list[str] = field(default_factory=list)
+    kwonly_types: dict[str, ValueType] = field(default_factory=dict)
+    kwonly_defaults: set[str] = field(default_factory=set)
+    vararg_name: str | None = None
+    kwarg_name: str | None = None
     return_type: ValueType = ValueType.UNKNOWN
     state: str = "unvisited"
     reachable: bool = False

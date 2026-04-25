@@ -22,6 +22,11 @@ class SymbolCollector:
                     param_names=statement.params,
                     param_types=[ValueType.UNKNOWN for _ in statement.params],
                     defaults_count=len(statement.defaults),
+                    kwonly_names=statement.kwonly_params,
+                    kwonly_types={name: ValueType.UNKNOWN for name in statement.kwonly_params},
+                    kwonly_defaults=set(statement.kwonly_defaults),
+                    vararg_name=statement.vararg,
+                    kwarg_name=statement.kwarg,
                     node=statement,
                 )
             elif isinstance(statement, ClassDef):

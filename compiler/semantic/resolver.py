@@ -8,10 +8,12 @@ from compiler.core.ast import (
     BoolOpExpr,
     CallExpr,
     ClassDef,
+    Comprehension,
     CompareExpr,
     ConstantExpr,
     DeleteStmt,
     DictExpr,
+    DictCompExpr,
     ExceptHandler,
     ExprStmt,
     ForStmt,
@@ -24,6 +26,7 @@ from compiler.core.ast import (
     ImportStmt,
     LambdaExpr,
     ListExpr,
+    ListCompExpr,
     MethodCallExpr,
     NameExpr,
     NonlocalStmt,
@@ -33,6 +36,7 @@ from compiler.core.ast import (
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SetCompExpr,
     SliceExpr,
     TryStmt,
     TupleExpr,
@@ -41,6 +45,7 @@ from compiler.core.ast import (
     WhileStmt,
     WithStmt,
 )
+from compiler.core.signature import bind_call_arguments
 from compiler.core.types import FunctionType, ValueType
 from compiler.semantic.model import Scope, SymbolTable
 from compiler.utils.error_handler import ErrorHandler
@@ -76,6 +81,8 @@ class NameResolver:
             if isinstance(statement, FunctionDef):
                 for default in statement.defaults:
                     self._resolve_expr(default, table.global_scope)
+                for default in statement.kwonly_defaults.values():
+                    self._resolve_expr(default, table.global_scope)
                 continue
             self._resolve_statement(statement, table.global_scope)
 
@@ -97,6 +104,12 @@ class NameResolver:
         self.local_functions.append({})
         for param in function.param_names:
             scope.define(param, ValueType.UNKNOWN)
+        for param in function.kwonly_names:
+            scope.define(param, ValueType.UNKNOWN)
+        if function.vararg_name is not None:
+            scope.define(function.vararg_name, ValueType.UNKNOWN)
+        if function.kwarg_name is not None:
+            scope.define(function.kwarg_name, ValueType.UNKNOWN)
 
         previous = self.current_function
         self.current_function = function
@@ -218,11 +231,18 @@ class NameResolver:
         if isinstance(statement, FunctionDef):
             for default in statement.defaults:
                 self._resolve_expr(default, scope)
+            for default in statement.kwonly_defaults.values():
+                self._resolve_expr(default, scope)
             local_function = FunctionType(
                 name=statement.name,
                 param_names=statement.params,
                 param_types=[ValueType.UNKNOWN for _ in statement.params],
                 defaults_count=len(statement.defaults),
+                kwonly_names=statement.kwonly_params,
+                kwonly_types={name: ValueType.UNKNOWN for name in statement.kwonly_params},
+                kwonly_defaults=set(statement.kwonly_defaults),
+                vararg_name=statement.vararg,
+                kwarg_name=statement.kwarg,
                 node=statement,
             )
             self._define_name(scope, statement.name, ValueType.UNKNOWN)
@@ -233,15 +253,26 @@ class NameResolver:
 
         if isinstance(statement, ClassDef):
             self._define_name(scope, statement.name, ValueType.UNKNOWN)
+            for base in statement.bases:
+                self._resolve_expr(base, scope)
+            for attribute in statement.attributes:
+                self._resolve_expr(attribute.value, scope)
             for method in statement.methods:
                 method_function = FunctionType(
                     name=f"{statement.name}.{method.name}",
                     param_names=method.params,
                     param_types=[ValueType.UNKNOWN for _ in method.params],
                     defaults_count=len(method.defaults),
+                    kwonly_names=method.kwonly_params,
+                    kwonly_types={name: ValueType.UNKNOWN for name in method.kwonly_params},
+                    kwonly_defaults=set(method.kwonly_defaults),
+                    vararg_name=method.vararg,
+                    kwarg_name=method.kwarg,
                     node=method,
                 )
                 for default in method.defaults:
+                    self._resolve_expr(default, scope)
+                for default in method.kwonly_defaults.values():
                     self._resolve_expr(default, scope)
                 self._resolve_local_function(method, scope, method_function)
             return
@@ -344,6 +375,22 @@ class NameResolver:
                 self._resolve_expr(element, scope)
             return
 
+        if isinstance(expr, ListCompExpr):
+            comp_scope = self._resolve_comprehension(expr.generators, scope)
+            self._resolve_expr(expr.element, comp_scope)
+            return
+
+        if isinstance(expr, SetCompExpr):
+            comp_scope = self._resolve_comprehension(expr.generators, scope)
+            self._resolve_expr(expr.element, comp_scope)
+            return
+
+        if isinstance(expr, DictCompExpr):
+            comp_scope = self._resolve_comprehension(expr.generators, scope)
+            self._resolve_expr(expr.key, comp_scope)
+            self._resolve_expr(expr.value, comp_scope)
+            return
+
         if isinstance(expr, IfExpr):
             self._resolve_expr(expr.condition, scope)
             self._resolve_expr(expr.body, scope)
@@ -351,6 +398,10 @@ class NameResolver:
             return
 
         if isinstance(expr, LambdaExpr):
+            for default in expr.func_def.defaults:
+                self._resolve_expr(default, scope)
+            for default in expr.func_def.kwonly_defaults.values():
+                self._resolve_expr(default, scope)
             self._resolve_local_function(
                 expr.func_def,
                 scope,
@@ -359,6 +410,11 @@ class NameResolver:
                     param_names=expr.func_def.params,
                     param_types=[ValueType.UNKNOWN for _ in expr.func_def.params],
                     defaults_count=len(expr.func_def.defaults),
+                    kwonly_names=expr.func_def.kwonly_params,
+                    kwonly_types={name: ValueType.UNKNOWN for name in expr.func_def.kwonly_params},
+                    kwonly_defaults=set(expr.func_def.kwonly_defaults),
+                    vararg_name=expr.func_def.vararg,
+                    kwarg_name=expr.func_def.kwarg,
                     node=expr.func_def,
                 )
             )
@@ -421,11 +477,26 @@ class NameResolver:
     def _error(self, node, message: str) -> None:
         self.errors.error("Semantic", message, node.span.line, node.span.column, node.span.end_line, node.span.end_column)
 
+    def _resolve_comprehension(self, generators: list[Comprehension], scope: Scope) -> Scope:
+        comp_scope = Scope(scope)
+        for generator in generators:
+            self._resolve_expr(generator.iterator, comp_scope)
+            comp_scope.define(generator.target, ValueType.UNKNOWN)
+            for condition in generator.ifs:
+                self._resolve_expr(condition, comp_scope)
+        return comp_scope
+
     def _resolve_local_function(self, statement: FunctionDef, enclosing_scope: Scope, function: FunctionType) -> None:
         scope = Scope(enclosing_scope)
         scope.define(statement.name, ValueType.UNKNOWN)
         for param in statement.params:
             scope.define(param, ValueType.UNKNOWN)
+        for param in statement.kwonly_params:
+            scope.define(param, ValueType.UNKNOWN)
+        if statement.vararg is not None:
+            scope.define(statement.vararg, ValueType.UNKNOWN)
+        if statement.kwarg is not None:
+            scope.define(statement.kwarg, ValueType.UNKNOWN)
 
         previous = self.current_function
         self.current_function = function
@@ -436,25 +507,22 @@ class NameResolver:
         self.local_functions.pop()
 
     def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
-        total_params = len(function.param_names)
-        required_params = total_params - function.defaults_count
-        if len(expr.args) > total_params:
-            self._error(expr, f"function {expr.func_name!r} expects at most {total_params} arguments, got {len(expr.args)}")
-            return
-
-        provided = set(function.param_names[: len(expr.args)])
-        for name in expr.kwargs:
-            if name not in function.param_names:
-                self._error(expr, f"function {expr.func_name!r} got unexpected keyword argument {name!r}")
-                continue
-            if name in provided:
-                self._error(expr, f"function {expr.func_name!r} got multiple values for argument {name!r}")
-                continue
-            provided.add(name)
-
-        missing = [name for name in function.param_names[:required_params] if name not in provided]
-        if missing:
-            self._error(expr, f"function {expr.func_name!r} missing required argument {missing[0]!r}")
+        positional_defaults = [object() for _ in range(function.defaults_count)]
+        kwonly_defaults = {name: object() for name in function.kwonly_defaults}
+        try:
+            bind_call_arguments(
+                expr.func_name,
+                function.param_names,
+                positional_defaults,
+                [object() for _ in expr.args],
+                {name: object() for name in expr.kwargs},
+                kwonly_params=function.kwonly_names,
+                kwonly_defaults=kwonly_defaults,
+                vararg_name=function.vararg_name,
+                kwarg_name=function.kwarg_name,
+            )
+        except ValueError as exc:
+            self._error(expr, str(exc))
 
     def _lookup_local_function(self, name: str) -> FunctionType | None:
         for scope in reversed(self.local_functions):

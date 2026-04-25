@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from compiler.core.signature import bind_call_arguments
 from compiler.vm.bytecode import BytecodeFunction
 from compiler.vm.errors import VMError
 
@@ -84,12 +85,15 @@ class Closure:
     function: BytecodeFunction
     closure_scopes: list[dict[str, object]]
     defaults: list[object] = field(default_factory=list)
+    kwonly_defaults: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
 class ClassObject:
     name: str
     methods: dict[str, BytecodeFunction]
+    bases: list["ClassObject"] = field(default_factory=list)
+    attributes: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -102,6 +106,15 @@ class InstanceObject:
 class BoundMethod:
     instance: InstanceObject | ModuleObject
     function: object
+
+
+@dataclass
+class SuperObject:
+    owner_class: ClassObject
+    instance: InstanceObject
+
+
+_MISSING = object()
 
 
 def unwrap_runtime_value(value: object) -> object:
@@ -172,6 +185,48 @@ def py_index_get(collection: object, index: object) -> object:
         raise VMError(str(exc)) from None
 
 
+def py_index_set(collection: object, index: object, value: object) -> None:
+    collection = unwrap_runtime_value(collection)
+    index = unwrap_runtime_value(index)
+    value = unwrap_runtime_value(value)
+    try:
+        collection[index] = value
+    except (IndexError, KeyError, TypeError) as exc:
+        raise VMError(str(exc)) from None
+
+
+def class_is_subclass(subclass: ClassObject, superclass: ClassObject | str) -> bool:
+    if isinstance(superclass, str):
+        if subclass.name == superclass:
+            return True
+    elif subclass is superclass:
+        return True
+    for base in subclass.bases:
+        if class_is_subclass(base, superclass):
+            return True
+    return False
+
+
+def _find_class_member(class_object: ClassObject, attr_name: str) -> object:
+    if attr_name in class_object.attributes:
+        return class_object.attributes[attr_name]
+    if attr_name in class_object.methods:
+        return class_object.methods[attr_name]
+    for base in class_object.bases:
+        value = _find_class_member(base, attr_name)
+        if value is not _MISSING:
+            return value
+    return _MISSING
+
+
+def _find_super_member(class_object: ClassObject, attr_name: str) -> object:
+    for base in class_object.bases:
+        value = _find_class_member(base, attr_name)
+        if value is not _MISSING:
+            return value
+    return _MISSING
+
+
 def py_load_attr(obj: object, attr_name: str) -> object:
     obj = unwrap_runtime_value(obj)
     if isinstance(obj, ModuleObject):
@@ -181,15 +236,24 @@ def py_load_attr(obj: object, attr_name: str) -> object:
     if isinstance(obj, InstanceObject):
         if attr_name in obj.fields:
             return obj.fields[attr_name]
-        method = obj.class_object.methods.get(attr_name)
-        if method is not None:
-            return BoundMethod(instance=obj, function=method)
+        member = _find_class_member(obj.class_object, attr_name)
+        if member is not _MISSING:
+            if isinstance(member, BytecodeFunction) or callable(member):
+                return BoundMethod(instance=obj, function=member)
+            return member
         raise VMError(f"instance of {obj.class_object.name!r} has no attribute {attr_name!r}")
     if isinstance(obj, ClassObject):
-        method = obj.methods.get(attr_name)
-        if method is not None:
-            return method
+        member = _find_class_member(obj, attr_name)
+        if member is not _MISSING:
+            return member
         raise VMError(f"class {obj.name!r} has no attribute {attr_name!r}")
+    if isinstance(obj, SuperObject):
+        member = _find_super_member(obj.owner_class, attr_name)
+        if member is _MISSING:
+            raise VMError(f"super object for {obj.owner_class.name!r} has no attribute {attr_name!r}")
+        if isinstance(member, BytecodeFunction) or callable(member):
+            return BoundMethod(instance=obj.instance, function=member)
+        return member
     if hasattr(obj, attr_name):
         return getattr(obj, attr_name)
     raise VMError(f"cannot access attribute {attr_name!r} on {type(obj).__name__}")
@@ -201,21 +265,38 @@ def py_store_attr(obj: object, attr_name: str, value: object) -> None:
     if isinstance(obj, InstanceObject):
         obj.fields[attr_name] = value
         return
+    if isinstance(obj, ClassObject):
+        obj.attributes[attr_name] = value
+        return
     if isinstance(obj, ModuleObject):
         obj.namespace[attr_name] = value
         return
     raise VMError(f"cannot set attribute {attr_name!r} on {type(obj).__name__}")
 
 
-def py_matches_exception(value: object, type_name: str | None) -> bool:
+def py_matches_exception(value: object, expected: object | str | None) -> bool:
     value = unwrap_runtime_value(value)
-    if type_name is None:
+    if expected is None:
         return True
-    if isinstance(value, InstanceObject):
-        return value.class_object.name == type_name
-    if isinstance(value, ClassObject):
-        return value.name == type_name
-    return type(value).__name__ == type_name
+    if isinstance(expected, tuple):
+        return any(py_matches_exception(value, item) for item in expected)
+    expected = unwrap_runtime_value(expected)
+    if isinstance(expected, str):
+        if isinstance(value, InstanceObject):
+            return class_is_subclass(value.class_object, expected)
+        if isinstance(value, ClassObject):
+            return class_is_subclass(value, expected)
+        return type(value).__name__ == expected
+    if isinstance(expected, ClassObject):
+        if isinstance(value, InstanceObject):
+            return class_is_subclass(value.class_object, expected)
+        if isinstance(value, ClassObject):
+            return class_is_subclass(value, expected)
+        return False
+    try:
+        return isinstance(value, expected)
+    except TypeError:
+        return False
 
 
 def py_invoke_callable(
@@ -224,17 +305,38 @@ def py_invoke_callable(
     module: ModuleObject,
     *,
     kwargs: dict[str, object] | None = None,
-    execute_function: Callable[[BytecodeFunction, list[object], ModuleObject, list[dict[str, object]] | None], object],
+    execute_function: Callable[[BytecodeFunction, dict[str, object], ModuleObject, list[dict[str, object]] | None], object],
 ) -> object:
     callable_obj = unwrap_runtime_value(callable_obj)
     args = [unwrap_runtime_value(arg) for arg in args]
     kwargs = {key: unwrap_runtime_value(value) for key, value in (kwargs or {}).items()}
     if isinstance(callable_obj, BytecodeFunction):
-        bound_args = bind_function_args(callable_obj.name, callable_obj.params, callable_obj.defaults, args, kwargs)
+        bound_args = bind_function_args(
+            callable_obj.name,
+            callable_obj.params,
+            callable_obj.defaults,
+            args,
+            kwargs,
+            kwonly_params=callable_obj.kwonly_params,
+            kwonly_defaults=callable_obj.kwonly_defaults,
+            vararg_name=callable_obj.vararg_name,
+            kwarg_name=callable_obj.kwarg_name,
+        )
         return execute_function(callable_obj, bound_args, module, None)
     if isinstance(callable_obj, Closure):
         defaults = callable_obj.defaults or callable_obj.function.defaults
-        bound_args = bind_function_args(callable_obj.function.name, callable_obj.function.params, defaults, args, kwargs)
+        kwonly_defaults = callable_obj.kwonly_defaults or callable_obj.function.kwonly_defaults
+        bound_args = bind_function_args(
+            callable_obj.function.name,
+            callable_obj.function.params,
+            defaults,
+            args,
+            kwargs,
+            kwonly_params=callable_obj.function.kwonly_params,
+            kwonly_defaults=kwonly_defaults,
+            vararg_name=callable_obj.function.vararg_name,
+            kwarg_name=callable_obj.function.kwarg_name,
+        )
         return execute_function(callable_obj.function, bound_args, module, callable_obj.closure_scopes)
     if isinstance(callable_obj, BoundMethod):
         if isinstance(callable_obj.function, BytecodeFunction):
@@ -244,6 +346,10 @@ def py_invoke_callable(
                 callable_obj.function.defaults,
                 [callable_obj.instance, *args],
                 kwargs,
+                kwonly_params=callable_obj.function.kwonly_params,
+                kwonly_defaults=callable_obj.function.kwonly_defaults,
+                vararg_name=callable_obj.function.vararg_name,
+                kwarg_name=callable_obj.function.kwarg_name,
             )
             return execute_function(callable_obj.function, bound_args, module, None)
         if callable(callable_obj.function):
@@ -251,9 +357,19 @@ def py_invoke_callable(
         raise VMError("invalid bound method")
     if isinstance(callable_obj, ClassObject):
         instance = InstanceObject(class_object=callable_obj)
-        initializer = callable_obj.methods.get("__init__")
-        if initializer is not None:
-            bound_args = bind_function_args(initializer.name, initializer.params, initializer.defaults, [instance, *args], kwargs)
+        initializer = _find_class_member(callable_obj, "__init__")
+        if isinstance(initializer, BytecodeFunction):
+            bound_args = bind_function_args(
+                initializer.name,
+                initializer.params,
+                initializer.defaults,
+                [instance, *args],
+                kwargs,
+                kwonly_params=initializer.kwonly_params,
+                kwonly_defaults=initializer.kwonly_defaults,
+                vararg_name=initializer.vararg_name,
+                kwarg_name=initializer.kwarg_name,
+            )
             execute_function(initializer, bound_args, module, None)
         elif args or kwargs:
             raise VMError(f"class {callable_obj.name!r} takes no arguments")
@@ -272,30 +388,23 @@ def bind_function_args(
     defaults: list[object],
     args: list[object],
     kwargs: dict[str, object] | None = None,
-) -> list[object]:
-    kwargs = dict(kwargs or {})
-    if len(args) > len(params):
-        raise VMError(f"function {function_name!r} expects at most {len(params)} arguments, got {len(args)}")
-
-    values: dict[str, object] = {}
-    for index, arg in enumerate(args):
-        values[params[index]] = arg
-
-    for name, value in kwargs.items():
-        if name not in params:
-            raise VMError(f"function {function_name!r} got unexpected keyword argument {name!r}")
-        if name in values:
-            raise VMError(f"function {function_name!r} got multiple values for argument {name!r}")
-        values[name] = value
-
-    first_default_index = len(params) - len(defaults)
-    for index, name in enumerate(params):
-        if name in values:
-            continue
-        default_index = index - first_default_index
-        if 0 <= default_index < len(defaults):
-            values[name] = defaults[default_index]
-            continue
-        raise VMError(f"function {function_name!r} missing required argument {name!r}")
-
-    return [values[name] for name in params]
+    *,
+    kwonly_params: list[str] | None = None,
+    kwonly_defaults: dict[str, object] | None = None,
+    vararg_name: str | None = None,
+    kwarg_name: str | None = None,
+) -> dict[str, object]:
+    try:
+        return bind_call_arguments(
+            function_name,
+            params,
+            defaults,
+            args,
+            kwargs,
+            kwonly_params=kwonly_params,
+            kwonly_defaults=kwonly_defaults,
+            vararg_name=vararg_name,
+            kwarg_name=kwarg_name,
+        )
+    except ValueError as exc:
+        raise VMError(str(exc)) from None

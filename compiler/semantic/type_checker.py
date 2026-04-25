@@ -8,10 +8,12 @@ from compiler.core.ast import (
     BoolOpExpr,
     CallExpr,
     ClassDef,
+    Comprehension,
     CompareExpr,
     ConstantExpr,
     DeleteStmt,
     DictExpr,
+    DictCompExpr,
     ExceptHandler,
     ExprStmt,
     ForStmt,
@@ -24,6 +26,7 @@ from compiler.core.ast import (
     ImportStmt,
     LambdaExpr,
     ListExpr,
+    ListCompExpr,
     MethodCallExpr,
     NameExpr,
     NonlocalStmt,
@@ -33,6 +36,7 @@ from compiler.core.ast import (
     RaiseStmt,
     ReturnStmt,
     SetExpr,
+    SetCompExpr,
     SliceExpr,
     TryStmt,
     TupleExpr,
@@ -41,6 +45,7 @@ from compiler.core.ast import (
     WhileStmt,
     WithStmt,
 )
+from compiler.core.signature import bind_call_arguments
 from compiler.core.types import FunctionType, ValueType, can_truth_test, is_numeric, merge_types
 from compiler.semantic.model import Scope, SymbolTable
 from compiler.utils.error_handler import ErrorHandler
@@ -78,6 +83,8 @@ class TypeChecker:
             if isinstance(statement, FunctionDef):
                 for default in statement.defaults:
                     self._check_expr(default, table.global_scope)
+                for default in statement.kwonly_defaults.values():
+                    self._check_expr(default, table.global_scope)
                 continue
             self._check_statement(statement, table.global_scope)
 
@@ -104,6 +111,16 @@ class TypeChecker:
         for param_name, param_type in zip(function.param_names, function.param_types):
             scope.define(param_name, param_type)
             function.local_types[param_name] = param_type
+        for param_name in function.kwonly_names:
+            param_type = function.kwonly_types.get(param_name, ValueType.UNKNOWN)
+            scope.define(param_name, param_type)
+            function.local_types[param_name] = param_type
+        if function.vararg_name is not None:
+            scope.define(function.vararg_name, ValueType.TUPLE)
+            function.local_types[function.vararg_name] = ValueType.TUPLE
+        if function.kwarg_name is not None:
+            scope.define(function.kwarg_name, ValueType.DICT)
+            function.local_types[function.kwarg_name] = ValueType.DICT
 
         previous = self.current_function
         self.current_function = function
@@ -262,11 +279,18 @@ class TypeChecker:
         if isinstance(statement, FunctionDef):
             for default in statement.defaults:
                 self._check_expr(default, scope)
+            for default in statement.kwonly_defaults.values():
+                self._check_expr(default, scope)
             local_function = FunctionType(
                 name=statement.name,
                 param_names=statement.params,
                 param_types=[ValueType.UNKNOWN for _ in statement.params],
                 defaults_count=len(statement.defaults),
+                kwonly_names=statement.kwonly_params,
+                kwonly_types={name: ValueType.UNKNOWN for name in statement.kwonly_params},
+                kwonly_defaults=set(statement.kwonly_defaults),
+                vararg_name=statement.vararg,
+                kwarg_name=statement.kwarg,
                 node=statement,
             )
             self._define_name(scope, statement.name, ValueType.UNKNOWN)
@@ -281,15 +305,30 @@ class TypeChecker:
             self._define_name(scope, statement.name, ValueType.UNKNOWN)
             if self.current_function is not None:
                 self.current_function.local_types[statement.name] = ValueType.UNKNOWN
+            for base in statement.bases:
+                base_type = self._check_expr(base, scope)
+                if base_type == ValueType.VOID:
+                    self._error(base, "class base cannot be void")
+            for attribute in statement.attributes:
+                value_type = self._check_expr(attribute.value, scope)
+                if value_type == ValueType.VOID:
+                    self._error(attribute, "class attribute cannot be assigned a void value")
             for method in statement.methods:
                 method_function = FunctionType(
                     name=f"{statement.name}.{method.name}",
                     param_names=method.params,
                     param_types=[ValueType.UNKNOWN for _ in method.params],
                     defaults_count=len(method.defaults),
+                    kwonly_names=method.kwonly_params,
+                    kwonly_types={name: ValueType.UNKNOWN for name in method.kwonly_params},
+                    kwonly_defaults=set(method.kwonly_defaults),
+                    vararg_name=method.vararg,
+                    kwarg_name=method.kwarg,
                     node=method,
                 )
                 for default in method.defaults:
+                    self._check_expr(default, scope)
+                for default in method.kwonly_defaults.values():
                     self._check_expr(default, scope)
                 self._check_local_function(method, scope, method_function)
             return
@@ -406,15 +445,25 @@ class TypeChecker:
                     target.param_types[index] = merged
                     updated = True
             for name, arg_type in kwarg_types.items():
-                if name not in target.param_names:
+                if name in target.param_names:
+                    index = target.param_names.index(name)
+                    merged = merge_types(target.param_types[index], arg_type)
+                    if merged is None:
+                        self._error(expr.kwargs[name], f"argument {name!r} to {expr.func_name!r} has incompatible type {arg_type.value}")
+                        continue
+                    if merged != target.param_types[index]:
+                        target.param_types[index] = merged
+                        updated = True
                     continue
-                index = target.param_names.index(name)
-                merged = merge_types(target.param_types[index], arg_type)
+                if name not in target.kwonly_names:
+                    continue
+                existing = target.kwonly_types.get(name, ValueType.UNKNOWN)
+                merged = merge_types(existing, arg_type)
                 if merged is None:
                     self._error(expr.kwargs[name], f"argument {name!r} to {expr.func_name!r} has incompatible type {arg_type.value}")
                     continue
-                if merged != target.param_types[index]:
-                    target.param_types[index] = merged
+                if merged != existing:
+                    target.kwonly_types[name] = merged
                     updated = True
             target.reachable = True
             if function is not None:
@@ -466,15 +515,48 @@ class TypeChecker:
             return self._set_expr_type(expr, result_type)
 
         if isinstance(expr, LambdaExpr):
+            for default in expr.func_def.defaults:
+                self._check_expr(default, scope)
+            for default in expr.func_def.kwonly_defaults.values():
+                self._check_expr(default, scope)
             local_function = FunctionType(
                 name=expr.func_def.name,
                 param_names=expr.func_def.params,
                 param_types=[ValueType.UNKNOWN for _ in expr.func_def.params],
                 defaults_count=len(expr.func_def.defaults),
+                kwonly_names=expr.func_def.kwonly_params,
+                kwonly_types={name: ValueType.UNKNOWN for name in expr.func_def.kwonly_params},
+                kwonly_defaults=set(expr.func_def.kwonly_defaults),
+                vararg_name=expr.func_def.vararg,
+                kwarg_name=expr.func_def.kwarg,
                 node=expr.func_def,
             )
             self._check_local_function(expr.func_def, scope, local_function)
             return self._set_expr_type(expr, ValueType.UNKNOWN)
+
+        if isinstance(expr, ListCompExpr):
+            comp_scope = self._check_comprehension(expr.generators, scope)
+            element_type = self._check_expr(expr.element, comp_scope)
+            if element_type == ValueType.VOID:
+                self._error(expr.element, "list comprehension elements cannot be void")
+            return self._set_expr_type(expr, ValueType.LIST)
+
+        if isinstance(expr, SetCompExpr):
+            comp_scope = self._check_comprehension(expr.generators, scope)
+            element_type = self._check_expr(expr.element, comp_scope)
+            if element_type == ValueType.VOID:
+                self._error(expr.element, "set comprehension elements cannot be void")
+            return self._set_expr_type(expr, ValueType.SET)
+
+        if isinstance(expr, DictCompExpr):
+            comp_scope = self._check_comprehension(expr.generators, scope)
+            key_type = self._check_expr(expr.key, comp_scope)
+            value_type = self._check_expr(expr.value, comp_scope)
+            if key_type == ValueType.VOID:
+                self._error(expr.key, "dict comprehension keys cannot be void")
+            if value_type == ValueType.VOID:
+                self._error(expr.value, "dict comprehension values cannot be void")
+            return self._set_expr_type(expr, ValueType.DICT)
 
         if isinstance(expr, IndexExpr):
             collection_type = self._check_expr(expr.collection, scope)
@@ -558,6 +640,17 @@ class TypeChecker:
         self.expr_types[id(expr)] = value_type
         return value_type
 
+    def _check_comprehension(self, generators: list[Comprehension], scope: Scope) -> Scope:
+        comp_scope = Scope(scope)
+        for generator in generators:
+            self._check_expr(generator.iterator, comp_scope)
+            comp_scope.define(generator.target, ValueType.UNKNOWN)
+            for condition in generator.ifs:
+                condition_type = self._check_expr(condition, comp_scope)
+                if condition_type != ValueType.UNKNOWN and not can_truth_test(condition_type):
+                    self._error(condition, f"comprehension condition must be truth-testable, got {condition_type.value}")
+        return comp_scope
+
     def _error(self, node, message: str) -> None:
         self.errors.error("Semantic", message, node.span.line, node.span.column, node.span.end_line, node.span.end_column)
 
@@ -567,6 +660,15 @@ class TypeChecker:
         for param_name in statement.params:
             scope.define(param_name, ValueType.UNKNOWN)
             local_function.local_types[param_name] = ValueType.UNKNOWN
+        for param_name in statement.kwonly_params:
+            scope.define(param_name, ValueType.UNKNOWN)
+            local_function.local_types[param_name] = ValueType.UNKNOWN
+        if statement.vararg is not None:
+            scope.define(statement.vararg, ValueType.TUPLE)
+            local_function.local_types[statement.vararg] = ValueType.TUPLE
+        if statement.kwarg is not None:
+            scope.define(statement.kwarg, ValueType.DICT)
+            local_function.local_types[statement.kwarg] = ValueType.DICT
 
         previous = self.current_function
         self.current_function = local_function
@@ -579,25 +681,22 @@ class TypeChecker:
             local_function.return_type = ValueType.VOID
 
     def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
-        total_params = len(function.param_names)
-        required_params = total_params - function.defaults_count
-        if len(expr.args) > total_params:
-            self._error(expr, f"function {expr.func_name!r} expects at most {total_params} arguments, got {len(expr.args)}")
-            return
-
-        provided = set(function.param_names[: len(expr.args)])
-        for name in expr.kwargs:
-            if name not in function.param_names:
-                self._error(expr, f"function {expr.func_name!r} got unexpected keyword argument {name!r}")
-                continue
-            if name in provided:
-                self._error(expr, f"function {expr.func_name!r} got multiple values for argument {name!r}")
-                continue
-            provided.add(name)
-
-        missing = [name for name in function.param_names[:required_params] if name not in provided]
-        if missing:
-            self._error(expr, f"function {expr.func_name!r} missing required argument {missing[0]!r}")
+        positional_defaults = [object() for _ in range(function.defaults_count)]
+        kwonly_defaults = {name: object() for name in function.kwonly_defaults}
+        try:
+            bind_call_arguments(
+                expr.func_name,
+                function.param_names,
+                positional_defaults,
+                [object() for _ in expr.args],
+                {name: object() for name in expr.kwargs},
+                kwonly_params=function.kwonly_names,
+                kwonly_defaults=kwonly_defaults,
+                vararg_name=function.vararg_name,
+                kwarg_name=function.kwarg_name,
+            )
+        except ValueError as exc:
+            self._error(expr, str(exc))
 
     def _lookup_local_function(self, name: str) -> FunctionType | None:
         for scope in reversed(self.local_functions):

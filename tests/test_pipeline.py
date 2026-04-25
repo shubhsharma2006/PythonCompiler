@@ -94,6 +94,27 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["8"])
 
+    def test_execute_source_supports_varargs_kwargs_and_keyword_only_parameters(self):
+        result, run_output, rendered = self.execute_program(
+            "def collect(a, *rest, flag=False, **named):\n"
+            "    print(a)\n"
+            "    print(len(rest))\n"
+            "    print(flag)\n"
+            "    print(named[\"extra\"])\n"
+            "collect(1, 2, 3, flag=True, extra=9)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["1", "2", "True", "9"])
+
+    def test_execute_source_supports_keyword_only_required_arguments(self):
+        result, run_output, rendered = self.execute_program(
+            "def configure(*, flag):\n"
+            "    print(flag)\n"
+            "configure(flag=True)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["True"])
+
     def test_execute_source_supports_method_keyword_arguments(self):
         result, run_output, rendered = self.execute_program(
             "class Greeter:\n"
@@ -105,6 +126,19 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["Hello, Ada", "Hi, Bob"])
+
+    def test_execute_source_supports_method_varargs_and_kwargs(self):
+        result, run_output, rendered = self.execute_program(
+            "class Collector:\n"
+            "    def collect(self, head, *rest, flag=False, **named):\n"
+            "        print(head)\n"
+            "        print(len(rest))\n"
+            "        print(flag)\n"
+            "        print(named[\"extra\"])\n"
+            "Collector().collect(1, 2, 3, flag=True, extra=5)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["1", "2", "True", "5"])
 
     def test_execute_source_supports_f_strings(self):
         result, run_output, rendered = self.execute_program(
@@ -141,6 +175,21 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["7"])
+
+    def test_execute_source_supports_local_package_imports(self):
+        result, run_output, rendered = self.execute_program_file(
+            "import pkg.tools\n"
+            "from pkg import helper\n"
+            "print(pkg.tools.value)\n"
+            "print(helper.message)\n",
+            {
+                "pkg/__init__.py": "name = 'pkg'\n",
+                "pkg/tools.py": "value = 7\n",
+                "pkg/helper.py": "message = 'loaded'\n",
+            },
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["7", "loaded"])
 
     def test_execute_source_supports_importlib_fallback_for_stdlib(self):
         result, run_output, rendered = self.execute_program(
@@ -311,6 +360,32 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["enter", "body", "exit"])
 
+    def test_execute_source_with_statement_can_suppress_exception(self):
+        result, run_output, rendered = self.execute_program(
+            "class CM:\n"
+            "    def __enter__(self):\n"
+            "        return 1\n"
+            "    def __exit__(self, exc_type, exc, tb):\n"
+            "        print(exc_type == ValueError)\n"
+            "        print(str(exc))\n"
+            "        return True\n"
+            "with CM():\n"
+            "    raise ValueError(\"boom\")\n"
+            "print(\"after\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["True", "boom", "after"])
+
+    def test_execute_source_typed_except_respects_host_exception_hierarchy(self):
+        result, run_output, rendered = self.execute_program(
+            "try:\n"
+            "    raise ValueError(\"boom\")\n"
+            "except Exception as err:\n"
+            "    print(err)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["boom"])
+
     def test_execute_source_supports_dicts_sets_and_container_methods(self):
         result, run_output, rendered = self.execute_program(
             'd = {"a": 1, "b": 2}\n'
@@ -323,6 +398,19 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["1", "2", "2", "True"])
+
+    def test_execute_source_supports_comprehensions(self):
+        result, run_output, rendered = self.execute_program(
+            "nums = [1, 2, 3, 4]\n"
+            "doubled = [x * 2 for x in nums if x > 1]\n"
+            "mapping = {x: x * x for x in nums if x % 2 == 0}\n"
+            "unique = {x for x in nums if x != 2}\n"
+            "print(doubled[0])\n"
+            "print(mapping[4])\n"
+            "print(len(unique))\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["4", "16", "3"])
 
     def test_execute_source_supports_classes_attributes_and_methods(self):
         result, run_output, rendered = self.execute_program(
@@ -339,6 +427,31 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["5", "6", "6"])
+
+    def test_execute_source_supports_inheritance_super_and_class_attributes(self):
+        result, run_output, rendered = self.execute_program(
+            "class Base:\n"
+            "    kind = \"base\"\n"
+            "    def __init__(self, value):\n"
+            "        self.value = value\n"
+            "    def greet(self):\n"
+            "        return \"base:\" + self.kind\n\n"
+            "class Child(Base):\n"
+            "    kind = \"child\"\n"
+            "    def greet(self):\n"
+            "        return super().greet() + \":\" + str(self.value)\n\n"
+            "child = Child(7)\n"
+            "print(child.kind)\n"
+            "print(Child.kind)\n"
+            "print(child.greet())\n"
+            "print(isinstance(child, Base))\n"
+            "print(issubclass(Child, Base))\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(
+            run_output.strip().splitlines(),
+            ["child", "child", "base:child:7", "True", "True"],
+        )
 
     def test_execute_source_reports_unhandled_exception(self):
         result, _, rendered = self.execute_program('raise "boom"\n')
@@ -394,6 +507,19 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("native compilation does not support default or keyword arguments yet", result.errors.render())
 
+    def test_compile_source_rejects_varargs_kwargs_and_keyword_only_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "def collect(a, *rest, flag=False, **named):\n"
+                "    return a\n\n"
+                "print(collect(1, 2, flag=True, extra=3))\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support default or keyword arguments yet", result.errors.render())
+
     def test_compile_source_rejects_core_vm_only_features_for_native_path(self):
         samples = [
             "items = [1, 2]\nprint(items[:1])\n",
@@ -412,6 +538,17 @@ class PipelineTests(unittest.TestCase):
                     result.errors.render(),
                 )
 
+    def test_compile_source_rejects_comprehensions_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "nums = [1, 2]\nprint([x for x in nums])\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support lists, tuples, indexing, or len() yet", result.errors.render())
+
     def test_compile_source_rejects_with_statement_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = os.path.join(temp_dir, "program.c")
@@ -428,6 +565,23 @@ class PipelineTests(unittest.TestCase):
             )
         self.assertFalse(result.success)
         self.assertIn("native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet", result.errors.render())
+
+    def test_compile_source_rejects_inheritance_and_super_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "class Base:\n"
+                "    def greet(self):\n"
+                "        return \"base\"\n"
+                "class Child(Base):\n"
+                "    def greet(self):\n"
+                "        return super().greet()\n"
+                "print(Child().greet())\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support classes, attributes, or methods yet", result.errors.render())
 
     def test_unpack_count_mismatch_fails_at_runtime(self):
         result, _, rendered = self.execute_program("a, b = (1, 2, 3)\n")
@@ -504,6 +658,16 @@ class PipelineTests(unittest.TestCase):
         result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
         self.assertFalse(result.success)
         self.assertIn("got multiple values for argument 'a'", rendered)
+
+    def test_missing_keyword_only_argument_fails(self):
+        source = (
+            "def configure(*, flag):\n"
+            "    return flag\n\n"
+            "print(configure())\n"
+        )
+        result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
+        self.assertFalse(result.success)
+        self.assertIn("missing required keyword-only argument 'flag'", rendered)
 
     def test_invalid_syntax_is_fatal(self):
         result, _, _, rendered, _, _, _, _ = self.compile_program("x = 1 $ 2\n", run=False)

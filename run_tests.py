@@ -120,6 +120,16 @@ SOURCE_TESTS = [
         "expected": ["9"],
     },
     {
+        "name": "Local package import",
+        "source": """import pkg.tools\nfrom pkg import helper\nprint(pkg.tools.value)\nprint(helper.message)\n""",
+        "extra_files": {
+            "pkg/__init__.py": "name = 'pkg'\n",
+            "pkg/tools.py": "value = 7\n",
+            "pkg/helper.py": "message = 'loaded'\n",
+        },
+        "expected": ["7", "loaded"],
+    },
+    {
         "name": "Stdlib import fallback",
         "source": """import math\nfrom math import sqrt\nimport os.path\nprint(math.sqrt(9))\nprint(sqrt(16))\nprint(os.path.basename("/tmp/demo.txt"))\n""",
         "expected": ["3.0", "4.0", "demo.txt"],
@@ -165,9 +175,19 @@ SOURCE_TESTS = [
         "expected": ["1", "2", "2", "True"],
     },
     {
+        "name": "Comprehensions",
+        "source": """nums = [1, 2, 3, 4]\ndoubled = [x * 2 for x in nums if x > 1]\nmapping = {x: x * x for x in nums if x % 2 == 0}\nunique = {x for x in nums if x != 2}\nprint(doubled[0])\nprint(mapping[4])\nprint(len(unique))\n""",
+        "expected": ["4", "16", "3"],
+    },
+    {
         "name": "Classes attributes and methods",
         "source": """class Counter:\n    def __init__(self, start):\n        self.value = start\n    def inc(self):\n        self.value = self.value + 1\n        return self.value\n\ncounter = Counter(5)\nprint(counter.value)\nprint(counter.inc())\nprint(counter.value)\n""",
         "expected": ["5", "6", "6"],
+    },
+    {
+        "name": "Inheritance super and class attributes",
+        "source": """class Base:\n    kind = "base"\n    def __init__(self, value):\n        self.value = value\n    def greet(self):\n        return "base:" + self.kind\n\nclass Child(Base):\n    kind = "child"\n    def greet(self):\n        return super().greet() + ":" + str(self.value)\n\nchild = Child(7)\nprint(child.kind)\nprint(Child.kind)\nprint(child.greet())\nprint(isinstance(child, Base))\nprint(issubclass(Child, Base))\n""",
+        "expected": ["child", "child", "base:child:7", "True", "True"],
     },
     {
         "name": "Basic try/except",
@@ -193,6 +213,11 @@ SOURCE_TESTS = [
         "name": "Keyword arguments",
         "source": """def combine(a, b, c=3):\n    return a + b + c\n\nprint(combine(1, c=5, b=2))\n""",
         "expected": ["8"],
+    },
+    {
+        "name": "Varargs kwargs and keyword-only parameters",
+        "source": """def collect(a, *rest, flag=False, **named):\n    print(a)\n    print(len(rest))\n    print(flag)\n    print(named["extra"])\ncollect(1, 2, 3, flag=True, extra=9)\n""",
+        "expected": ["1", "2", "True", "9"],
     },
     {
         "name": "F strings",
@@ -257,6 +282,11 @@ NEGATIVE_TESTS = [
         "name": "Reject duplicate keyword argument",
         "source": "def add(a, b=1):\n    return a + b\n\nprint(add(1, a=2))\n",
         "expected_substring": "got multiple values for argument 'a'",
+    },
+    {
+        "name": "Reject missing keyword-only argument",
+        "source": "def configure(*, flag):\n    return flag\n\nprint(configure())\n",
+        "expected_substring": "missing required keyword-only argument 'flag'",
     },
     {
         "name": "Reject unhandled exceptions",

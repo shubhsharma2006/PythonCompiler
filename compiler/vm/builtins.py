@@ -4,7 +4,7 @@ import builtins as py_builtins
 from typing import Protocol
 
 from compiler.vm.errors import VMError
-from compiler.vm.objects import unwrap_runtime_value
+from compiler.vm.objects import ClassObject, InstanceObject, class_is_subclass, unwrap_runtime_value
 
 
 class BuiltinHost(Protocol):
@@ -15,6 +15,36 @@ class BuiltinHost(Protocol):
     def current_globals(self) -> dict[str, object]: ...
 
     def current_locals(self) -> dict[str, object]: ...
+
+    def build_super(self, *args) -> object: ...
+
+
+def builtin_isinstance(obj: object, classinfo: object) -> bool:
+    obj = unwrap_runtime_value(obj)
+    classinfo = unwrap_runtime_value(classinfo)
+    if isinstance(classinfo, tuple):
+        return any(builtin_isinstance(obj, item) for item in classinfo)
+    if isinstance(classinfo, ClassObject):
+        return isinstance(obj, InstanceObject) and class_is_subclass(obj.class_object, classinfo)
+    try:
+        return isinstance(obj, classinfo)
+    except TypeError as exc:
+        raise VMError(str(exc)) from None
+
+
+def builtin_issubclass(cls: object, classinfo: object) -> bool:
+    cls = unwrap_runtime_value(cls)
+    classinfo = unwrap_runtime_value(classinfo)
+    if not isinstance(cls, ClassObject):
+        try:
+            return issubclass(cls, classinfo)
+        except TypeError as exc:
+            raise VMError(str(exc)) from None
+    if isinstance(classinfo, tuple):
+        return any(builtin_issubclass(cls, item) for item in classinfo)
+    if isinstance(classinfo, ClassObject):
+        return class_is_subclass(cls, classinfo)
+    raise VMError("issubclass() arg 2 must be a class or tuple of classes")
 
 
 def builtin_range(*args):
@@ -69,8 +99,8 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
         "frozenset": frozenset,
         "complex": complex,
         "type": type,
-        "isinstance": isinstance,
-        "issubclass": issubclass,
+        "isinstance": builtin_isinstance,
+        "issubclass": builtin_issubclass,
         "hasattr": hasattr,
         "getattr": getattr,
         "setattr": setattr,
@@ -106,7 +136,7 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
         "any": any,
         "all": all,
         "object": object,
-        "super": super,
+        "super": host.build_super,
         "property": property,
         "staticmethod": staticmethod,
         "classmethod": classmethod,

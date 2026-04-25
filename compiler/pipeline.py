@@ -12,6 +12,7 @@ from compiler.core.ast import (
     BoolOpExpr,
     CallExpr,
     CompareExpr,
+    DictCompExpr,
     ClassDef,
     DeleteStmt,
     DictExpr,
@@ -22,10 +23,12 @@ from compiler.core.ast import (
     IfStmt,
     ImportStmt,
     IndexExpr,
+    ListCompExpr,
     PrintStmt,
     Program,
     RaiseStmt,
     SetExpr,
+    SetCompExpr,
     TryStmt,
     WhileStmt,
     BinaryExpr,
@@ -162,12 +165,14 @@ def _program_uses_for_loops(program: Program) -> bool:
 
 
 def _expr_uses_container_features(expr) -> bool:
-    if isinstance(expr, (ListExpr, TupleExpr, DictExpr, SetExpr, IndexExpr)):
+    if isinstance(expr, (ListExpr, TupleExpr, DictExpr, SetExpr, IndexExpr, ListCompExpr, SetCompExpr, DictCompExpr)):
         return True
     if isinstance(expr, CallExpr):
         if expr.func_name in {"len", "dict", "set", "list", "tuple"}:
             return True
-        return any(_expr_uses_container_features(arg) for arg in expr.args)
+        return any(_expr_uses_container_features(arg) for arg in expr.args) or any(
+            _expr_uses_container_features(arg) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, BinaryExpr):
         return _expr_uses_container_features(expr.left) or _expr_uses_container_features(expr.right)
     if isinstance(expr, CompareExpr):
@@ -176,6 +181,14 @@ def _expr_uses_container_features(expr) -> bool:
         return _expr_uses_container_features(expr.left) or _expr_uses_container_features(expr.right)
     if isinstance(expr, UnaryExpr):
         return _expr_uses_container_features(expr.operand)
+    if isinstance(expr, AttributeExpr):
+        return _expr_uses_container_features(expr.object)
+    if isinstance(expr, MethodCallExpr):
+        return (
+            _expr_uses_container_features(expr.object)
+            or any(_expr_uses_container_features(arg) for arg in expr.args)
+            or any(_expr_uses_container_features(arg) for arg in expr.kwargs.values())
+        )
     return False
 
 
@@ -227,6 +240,25 @@ def _expr_uses_object_features(expr) -> bool:
         return any(_expr_uses_object_features(element) for element in expr.elements)
     if isinstance(expr, TupleExpr):
         return any(_expr_uses_object_features(element) for element in expr.elements)
+    if isinstance(expr, ListCompExpr):
+        return _expr_uses_object_features(expr.element) or any(
+            _expr_uses_object_features(generator.iterator) or any(_expr_uses_object_features(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, SetCompExpr):
+        return _expr_uses_object_features(expr.element) or any(
+            _expr_uses_object_features(generator.iterator) or any(_expr_uses_object_features(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, DictCompExpr):
+        return (
+            _expr_uses_object_features(expr.key)
+            or _expr_uses_object_features(expr.value)
+            or any(
+                _expr_uses_object_features(generator.iterator) or any(_expr_uses_object_features(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        )
     return False
 
 
@@ -298,12 +330,38 @@ def _expr_uses_call_signature_features(expr) -> bool:
         return any(_expr_uses_call_signature_features(element) for element in expr.elements)
     if isinstance(expr, AttributeExpr):
         return _expr_uses_call_signature_features(expr.object)
+    if isinstance(expr, ListCompExpr):
+        return _expr_uses_call_signature_features(expr.element) or any(
+            _expr_uses_call_signature_features(generator.iterator) or any(_expr_uses_call_signature_features(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, SetCompExpr):
+        return _expr_uses_call_signature_features(expr.element) or any(
+            _expr_uses_call_signature_features(generator.iterator) or any(_expr_uses_call_signature_features(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, DictCompExpr):
+        return (
+            _expr_uses_call_signature_features(expr.key)
+            or _expr_uses_call_signature_features(expr.value)
+            or any(
+                _expr_uses_call_signature_features(generator.iterator) or any(_expr_uses_call_signature_features(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        )
     return False
 
 
 def _program_uses_call_signature_features(program: Program) -> bool:
     def function_uses_defaults(function: FunctionDef) -> bool:
-        return bool(function.defaults) or any(_expr_uses_call_signature_features(default) for default in function.defaults)
+        return (
+            bool(function.defaults)
+            or bool(function.kwonly_params)
+            or function.vararg is not None
+            or function.kwarg is not None
+            or any(_expr_uses_call_signature_features(default) for default in function.defaults)
+            or any(_expr_uses_call_signature_features(default) for default in function.kwonly_defaults.values())
+        )
 
     def walk(statements: list[object]) -> bool:
         for statement in statements:
@@ -376,6 +434,25 @@ def _expr_uses_slicing(expr) -> bool:
         return any(_expr_uses_slicing(element) for element in expr.elements)
     if isinstance(expr, AttributeExpr):
         return _expr_uses_slicing(expr.object)
+    if isinstance(expr, ListCompExpr):
+        return _expr_uses_slicing(expr.element) or any(
+            _expr_uses_slicing(generator.iterator) or any(_expr_uses_slicing(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, SetCompExpr):
+        return _expr_uses_slicing(expr.element) or any(
+            _expr_uses_slicing(generator.iterator) or any(_expr_uses_slicing(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, DictCompExpr):
+        return (
+            _expr_uses_slicing(expr.key)
+            or _expr_uses_slicing(expr.value)
+            or any(
+                _expr_uses_slicing(generator.iterator) or any(_expr_uses_slicing(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        )
     return False
 
 
