@@ -7,9 +7,11 @@ from compiler.core.ast import (
     BinaryExpr,
     BoolOpExpr,
     CallExpr,
+    CallValueExpr,
     ClassDef,
     Comprehension,
     CompareExpr,
+    CompareChainExpr,
     ConstantExpr,
     DeleteStmt,
     DictExpr,
@@ -38,6 +40,10 @@ from compiler.core.ast import (
     SetExpr,
     SetCompExpr,
     SliceExpr,
+    StarUnpackAssignStmt,
+    StarredExpr,
+    KwStarredExpr,
+    NamedExpr,
     TryStmt,
     TupleExpr,
     UnaryExpr,
@@ -70,6 +76,7 @@ class NameResolver:
         self.table: SymbolTable | None = None
         self.current_function: FunctionType | None = None
         self.local_functions: list[dict[str, FunctionType]] = []
+        self._except_depth = 0
 
     def resolve(self, program: Program, table: SymbolTable) -> None:
         self.table = table
@@ -121,9 +128,6 @@ class NameResolver:
 
     def _resolve_statement(self, statement, scope: Scope) -> None:
         if isinstance(statement, AssignStmt):
-            if scope is self.table.global_scope and statement.name in self.table.functions:
-                self._error(statement, f"cannot assign to function name {statement.name!r}")
-                return
             self._resolve_expr(statement.value, scope)
             self._define_name(scope, statement.name, ValueType.UNKNOWN)
             return
@@ -131,6 +135,15 @@ class NameResolver:
         if isinstance(statement, UnpackAssignStmt):
             self._resolve_expr(statement.value, scope)
             for target in statement.targets:
+                self._define_name(scope, target, ValueType.UNKNOWN)
+            return
+
+        if isinstance(statement, StarUnpackAssignStmt):
+            self._resolve_expr(statement.value, scope)
+            for target in statement.prefix_targets:
+                self._define_name(scope, target, ValueType.UNKNOWN)
+            self._define_name(scope, statement.starred_target, ValueType.UNKNOWN)
+            for target in statement.suffix_targets:
                 self._define_name(scope, target, ValueType.UNKNOWN)
             return
 
@@ -168,6 +181,9 @@ class NameResolver:
             return
 
         if isinstance(statement, FromImportStmt):
+            if statement.name == "*":
+                scope.declare_wildcard_import()
+                return
             self._define_name(scope, statement.alias or statement.name, ValueType.UNKNOWN)
             return
 
@@ -181,7 +197,7 @@ class NameResolver:
             return
 
         if isinstance(statement, ExprStmt):
-            if not isinstance(statement.expr, (CallExpr, MethodCallExpr)):
+            if not isinstance(statement.expr, (CallExpr, CallValueExpr, MethodCallExpr)):
                 self._error(statement, "only function and method calls may be used as standalone expressions")
             self._resolve_expr(statement.expr, scope)
             return
@@ -204,7 +220,11 @@ class NameResolver:
 
         if isinstance(statement, ForStmt):
             self._resolve_expr(statement.iterator, scope)
-            self._define_name(scope, statement.target, ValueType.UNKNOWN)
+            if isinstance(statement.target, list):
+                for name in statement.target:
+                    self._define_name(scope, name, ValueType.UNKNOWN)
+            else:
+                self._define_name(scope, statement.target, ValueType.UNKNOWN)
             for child in statement.body:
                 self._resolve_statement(child, scope)
             for child in statement.orelse:
@@ -215,7 +235,11 @@ class NameResolver:
             for child in statement.body:
                 self._resolve_statement(child, scope)
             for handler in statement.handlers:
+                self._except_depth += 1
                 self._resolve_handler(handler, scope)
+                self._except_depth -= 1
+            for child in statement.orelse:
+                self._resolve_statement(child, scope)
             for child in statement.finalbody:
                 self._resolve_statement(child, scope)
             return
@@ -286,7 +310,12 @@ class NameResolver:
             return
 
         if isinstance(statement, RaiseStmt):
-            self._resolve_expr(statement.value, scope)
+            if statement.value is None and self._except_depth == 0:
+                self._error(statement, "bare raise is only valid inside an except block")
+            if statement.value is not None:
+                self._resolve_expr(statement.value, scope)
+            if statement.cause is not None:
+                self._resolve_expr(statement.cause, scope)
 
     def _resolve_expr(self, expr, scope: Scope) -> None:
         if isinstance(expr, ConstantExpr):
@@ -296,14 +325,27 @@ class NameResolver:
             if self._is_builtin_function(expr.name):
                 return
             if expr.name in self.table.functions:
-                self._error(expr, f"function {expr.name!r} cannot be used as a value")
+                self._resolve_function(self.table.functions[expr.name])
                 return
-            if scope.lookup(expr.name) is None:
+            if scope.lookup(expr.name) is None and not scope.has_wildcard_import():
                 self._error(expr, f"undefined variable {expr.name!r}")
             return
 
         if isinstance(expr, UnaryExpr):
             self._resolve_expr(expr.operand, scope)
+            return
+
+        if isinstance(expr, StarredExpr):
+            self._resolve_expr(expr.value, scope)
+            return
+        if isinstance(expr, KwStarredExpr):
+            self._resolve_expr(expr.value, scope)
+            return
+        if isinstance(expr, NamedExpr):
+            self._resolve_expr(expr.value, scope)
+            # Walrus defines/updates the target in the current scope.
+            if scope.lookup(expr.target) is None:
+                scope.define(expr.target, ValueType.UNKNOWN)
             return
 
         if isinstance(expr, BinaryExpr):
@@ -314,6 +356,11 @@ class NameResolver:
         if isinstance(expr, CompareExpr):
             self._resolve_expr(expr.left, scope)
             self._resolve_expr(expr.right, scope)
+            return
+
+        if isinstance(expr, CompareChainExpr):
+            for operand in expr.operands:
+                self._resolve_expr(operand, scope)
             return
 
         if isinstance(expr, BoolOpExpr):
@@ -335,7 +382,7 @@ class NameResolver:
             local_function = self._lookup_local_function(expr.func_name)
             target = function or local_function
             if target is None:
-                if scope.lookup(expr.func_name) is not None:
+                if scope.lookup(expr.func_name) is not None or scope.has_wildcard_import():
                     for arg in expr.args:
                         self._resolve_expr(arg, scope)
                     for arg in expr.kwargs.values():
@@ -351,6 +398,14 @@ class NameResolver:
                 self._resolve_expr(arg, scope)
             if function is not None:
                 self._resolve_function(function)
+            return
+
+        if isinstance(expr, CallValueExpr):
+            self._resolve_expr(expr.callee, scope)
+            for arg in expr.args:
+                self._resolve_expr(arg, scope)
+            for arg in expr.kwargs.values():
+                self._resolve_expr(arg, scope)
             return
 
         if isinstance(expr, ListExpr):
@@ -461,8 +516,11 @@ class NameResolver:
 
     def _resolve_delete_target(self, target, scope: Scope) -> None:
         if isinstance(target, NameExpr):
-            if scope.lookup(target.name) is None:
+            if scope.lookup(target.name) is None and not scope.has_wildcard_import():
                 self._error(target, f"undefined variable {target.name!r}")
+            return
+        if isinstance(target, AttributeExpr):
+            self._resolve_expr(target.object, scope)
             return
         if isinstance(target, IndexExpr):
             self._resolve_expr(target.collection, scope)
@@ -507,6 +565,10 @@ class NameResolver:
         self.local_functions.pop()
 
     def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
+        if any(isinstance(arg, StarredExpr) for arg in expr.args):
+            return
+        if getattr(expr, "kw_starred", []):
+            return
         positional_defaults = [object() for _ in range(function.defaults_count)]
         kwonly_defaults = {name: object() for name in function.kwonly_defaults}
         try:

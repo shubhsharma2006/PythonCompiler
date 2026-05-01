@@ -99,6 +99,43 @@ TESTS = [
             "booleans done!",
         ],
     },
+    {
+        "name": "Phase 1 Operators",
+        "file": "test_phase1_ops.py",
+        "expected": [
+            "3",
+            "49",
+            "2",
+            "7",
+            "5",
+            "14",
+            "3",
+            "7",
+            "-8",
+            "Phase 1 ops done!",
+            "-4",
+            "-4",
+            "3",
+            "1024",
+            "Phase 1 ops edge cases done!",
+        ],
+    },
+    {
+        "name": "Native semantics (modulo, truthiness)",
+        "file": "test_native_semantics.py",
+        "expected": [
+            "1",
+            "-1",
+            "-1",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "Native semantics done!",
+        ],
+    },
 ]
 
 
@@ -128,6 +165,24 @@ SOURCE_TESTS = [
             "pkg/helper.py": "message = 'loaded'\n",
         },
         "expected": ["7", "loaded"],
+    },
+    {
+        "name": "Relative imports",
+        "source": """from . import helper\nfrom .helper import value\nprint(helper.value)\nprint(value)\n""",
+        "filename": "pkg/main.py",
+        "extra_files": {
+            "pkg/__init__.py": "",
+            "pkg/helper.py": "value = 11\n",
+        },
+        "expected": ["11", "11"],
+    },
+    {
+        "name": "Star imports",
+        "source": """from helper import *\nprint(value)\nprint(add(2, 5))\n""",
+        "extra_files": {
+            "helper.py": "__all__ = ['value', 'add']\nvalue = 7\ndef add(a, b):\n    return a + b\n_hidden = 9\n",
+        },
+        "expected": ["7", "7"],
     },
     {
         "name": "Stdlib import fallback",
@@ -166,8 +221,8 @@ SOURCE_TESTS = [
     },
     {
         "name": "With statement",
-        "source": """class CM:\n    def __enter__(self):\n        print("enter")\n        return "body"\n    def __exit__(self, exc_type, exc, tb):\n        print("exit")\nwith CM() as value:\n    print(value)\n""",
-        "expected": ["enter", "body", "exit"],
+        "source": """class CM:\n    def __enter__(self):\n        print("enter")\n        return "body"\n    def __exit__(self, exc_type, exc, tb):\n        print("exit")\nwith CM() as value, CM() as other:\n    print(value)\n    print(other)\n""",
+        "expected": ["enter", "enter", "body", "body", "exit", "exit"],
     },
     {
         "name": "Dicts sets and container methods",
@@ -188,6 +243,11 @@ SOURCE_TESTS = [
         "name": "Inheritance super and class attributes",
         "source": """class Base:\n    kind = "base"\n    def __init__(self, value):\n        self.value = value\n    def greet(self):\n        return "base:" + self.kind\n\nclass Child(Base):\n    kind = "child"\n    def greet(self):\n        return super().greet() + ":" + str(self.value)\n\nchild = Child(7)\nprint(child.kind)\nprint(Child.kind)\nprint(child.greet())\nprint(isinstance(child, Base))\nprint(issubclass(Child, Base))\n""",
         "expected": ["child", "child", "base:child:7", "True", "True"],
+    },
+    {
+        "name": "Decorators",
+        "source": """def decorate(fn):\n    def wrapped(name):\n        return fn(name) + "!"\n    return wrapped\n\ndef mark(cls):\n    cls.tag = "ok"\n    return cls\n\n@decorate\ndef greet(name):\n    return "hi " + name\n\n@mark\nclass Box:\n    pass\n\nprint(greet("Ada"))\nprint(Box.tag)\n""",
+        "expected": ["hi Ada!", "ok"],
     },
     {
         "name": "Basic try/except",
@@ -226,13 +286,33 @@ SOURCE_TESTS = [
     },
     {
         "name": "Membership and identity operators",
-        "source": """items = [1, 2, 3]\nprint(2 in items)\nprint(4 not in items)\nprint(items is items)\n""",
-        "expected": ["True", "True", "True"],
+        "source": """items = [1, 2, 3]\nprint(2 in items)\nprint(4 not in items)\nprint(items is items)\nprint(1 < 2 < 3)\nprint(1 < 2 > 4)\n""",
+        "expected": ["True", "True", "True", "True", "False"],
     },
     {
         "name": "Additional builtins",
         "source": """items = [3, 1, 2]\nprint(sorted(items)[0])\nprint(str(10))\nprint(abs(-4))\n""",
         "expected": ["1", "10", "4"],
+    },
+    {
+        "name": "Mixed numeric ops (VM)",
+        "source": """print(7.0 // 2)\nprint(7 // 2.0)\nprint(2 ** 3.0)\nprint(2.0 ** 3)\n""",
+        "expected": ["3.0", "3.0", "8.0", "8.0"],
+    },
+    {
+        "name": "Phase 2: tuple target in for-loop",
+        "source": """pairs = [(1, 2), (3, 4)]\ntotal = 0\nfor a, b in pairs:\n    total = total + a + b\nprint(total)\n""",
+        "expected": ["10"],
+    },
+    {
+        "name": "Phase 2: starred unpack assignment",
+        "source": """a, *rest, b = [1, 2, 3, 4]\nprint(a)\nprint(rest[0])\nprint(len(rest))\nprint(b)\n""",
+        "expected": ["1", "2", "2", "4"],
+    },
+    {
+        "name": "Phase 2: *args splat in calls",
+        "source": """def add3(a, b, c):\n    return a + b + c\n\nargs = [1, 2, 3]\nprint(add3(*args))\n""",
+        "expected": ["6"],
     },
     {
         "name": "Try/finally on return",
@@ -243,6 +323,11 @@ SOURCE_TESTS = [
         "name": "Try/finally exception propagation",
         "source": """try:\n    try:\n        raise "boom"\n    finally:\n        print("cleanup")\nexcept:\n    print("handled")\n""",
         "expected": ["cleanup", "handled"],
+    },
+    {
+        "name": "Try else and reraise",
+        "source": """try:\n    print("body")\nexcept Exception:\n    print("except")\nelse:\n    print("else")\n\ntry:\n    try:\n        raise ValueError("boom")\n    except ValueError:\n        raise\nexcept Exception as err:\n    print(err)\n""",
+        "expected": ["body", "else", "boom"],
     },
 ]
 
@@ -305,8 +390,8 @@ NEGATIVE_TESTS = [
     },
     {
         "name": "Reject starred unpacking",
-        "source": "a, *rest = [1, 2, 3]\n",
-        "expected_substring": "starred assignment is not supported yet",
+        "source": "a, *rest, *more = [1, 2, 3]\n",
+        "expected_substring": "only a single starred assignment target is supported",
     },
     {
         "name": "Reject invalid nonlocal",
@@ -319,9 +404,47 @@ NEGATIVE_TESTS = [
         "expected_substring": "only name and subscript delete targets are supported",
     },
     {
-        "name": "Reject multiple with contexts",
-        "source": "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, exc_type, exc, tb):\n        pass\nwith CM() as a, CM() as b:\n    print(a)\n",
-        "expected_substring": "multiple context managers in one with statement are not supported yet",
+        "name": "Reject invalid with-as target",
+        "source": "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, exc_type, exc, tb):\n        pass\nwith CM() as (a, b):\n    print(a)\n",
+        "expected_substring": "only simple name targets in with-as clauses are supported",
+    },
+    {
+        "name": "Reject bare raise outside except",
+        "source": "raise\n",
+        "expected_substring": "bare raise is only valid inside an except block",
+    },
+    {
+        "name": "Reject negative exponent in native codegen",
+        "source": "print(2 ** -1)\n",
+        "native": True,
+        "expected_substring": "native compilation does not support negative integer exponents",
+    },
+    {
+        "name": "Reject mixed int/float // or ** in native codegen",
+        "source": "print(7.0 // 2)\nprint(2 ** 3.0)\n",
+        "native": True,
+        "expected_substring": "native compilation does not support mixed int/float operands for '//' or '**' yet",
+    },
+    {
+        "name": "Reject **kwargs splat in native codegen",
+        "source": """def inner(**kw):
+    return 0
+
+def outer(**kw):
+    return inner(**kw)
+
+print(outer(a=1))
+""",
+        "native": True,
+    "expected_substring": "native compilation does not support default or keyword arguments yet",
+    },
+    {
+        "name": "Reject walrus in native codegen",
+        "source": """if (x := 1) == 1:
+    print(x)
+""",
+        "native": True,
+        "expected_substring": "native compilation does not support the walrus operator ':=' yet",
     },
 ]
 
@@ -370,8 +493,12 @@ def run_negative_test(test):
         temp_path = handle.name
 
     try:
+        native = test.get("native", False)
+        cmd = [sys.executable, "main.py", temp_path, "--no-viz", "-q"]
+        if native:
+            cmd.insert(3, "--compile-native")
         result = subprocess.run(
-            [sys.executable, "main.py", temp_path, "--no-viz", "-q"],
+            cmd,
             capture_output=True,
             text=True,
         )
@@ -391,15 +518,16 @@ def run_negative_test(test):
 
 
 def run_source_test(test):
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, dir=".") as handle:
-        handle.write(test["source"])
-        temp_path = handle.name
+    with tempfile.TemporaryDirectory() as root_dir:
+        main_relative = test.get("filename", "main.py")
+        temp_path = os.path.join(root_dir, main_relative)
+        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            handle.write(test["source"])
 
-    try:
-        temp_dir = os.path.dirname(temp_path)
         created_files = []
         for relative_path, contents in test.get("extra_files", {}).items():
-            full_path = os.path.join(temp_dir, relative_path)
+            full_path = os.path.join(root_dir, relative_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as handle:
                 handle.write(contents)
@@ -424,11 +552,6 @@ def run_source_test(test):
         print(f"  {RD}✘ FAIL{R}  {test['name']}")
         print(f"    Expected {test['expected']!r}, got {actual_lines!r}")
         return False
-    finally:
-        for full_path in locals().get("created_files", []):
-            if os.path.exists(full_path):
-                os.unlink(full_path)
-        os.unlink(temp_path)
 
 
 def run_cli_smoke():

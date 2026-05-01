@@ -7,9 +7,11 @@ from compiler.core.ast import (
     BinaryExpr,
     BoolOpExpr,
     CallExpr,
+    CallValueExpr,
     ClassDef,
     Comprehension,
     CompareExpr,
+    CompareChainExpr,
     ConstantExpr,
     DeleteStmt,
     DictExpr,
@@ -38,6 +40,10 @@ from compiler.core.ast import (
     SetExpr,
     SetCompExpr,
     SliceExpr,
+    StarUnpackAssignStmt,
+    StarredExpr,
+    KwStarredExpr,
+    NamedExpr,
     TryStmt,
     TupleExpr,
     UnaryExpr,
@@ -156,6 +162,23 @@ class TypeChecker:
                     self.current_function.local_types[target] = ValueType.UNKNOWN
             return
 
+        if isinstance(statement, StarUnpackAssignStmt):
+            value_type = self._check_expr(statement.value, scope)
+            if value_type == ValueType.VOID:
+                self._error(statement.value, "cannot unpack a void value")
+            for target in statement.prefix_targets:
+                self._define_name(scope, target, ValueType.UNKNOWN)
+                if self.current_function is not None:
+                    self.current_function.local_types[target] = ValueType.UNKNOWN
+            self._define_name(scope, statement.starred_target, ValueType.UNKNOWN)
+            if self.current_function is not None:
+                self.current_function.local_types[statement.starred_target] = ValueType.UNKNOWN
+            for target in statement.suffix_targets:
+                self._define_name(scope, target, ValueType.UNKNOWN)
+                if self.current_function is not None:
+                    self.current_function.local_types[target] = ValueType.UNKNOWN
+            return
+
         if isinstance(statement, AttributeAssignStmt):
             object_type = self._check_expr(statement.object, scope)
             value_type = self._check_expr(statement.value, scope)
@@ -244,9 +267,15 @@ class TypeChecker:
         if isinstance(statement, ForStmt):
             iterator_type = self._check_expr(statement.iterator, scope)
             target_type = ValueType.INT if self._is_range_call(statement.iterator) else ValueType.UNKNOWN
-            self._define_name(scope, statement.target, target_type)
-            if self.current_function is not None:
-                self.current_function.local_types[statement.target] = target_type
+            if isinstance(statement.target, list):
+                for name in statement.target:
+                    self._define_name(scope, name, target_type)
+                    if self.current_function is not None:
+                        self.current_function.local_types[name] = target_type
+            else:
+                self._define_name(scope, statement.target, target_type)
+                if self.current_function is not None:
+                    self.current_function.local_types[statement.target] = target_type
             if iterator_type == ValueType.VOID:
                 self._error(statement.iterator, "for-loop iterator cannot be void")
             for child in statement.body:
@@ -260,6 +289,8 @@ class TypeChecker:
                 self._check_statement(child, scope)
             for handler in statement.handlers:
                 self._check_handler(handler, scope)
+            for child in statement.orelse:
+                self._check_statement(child, scope)
             for child in statement.finalbody:
                 self._check_statement(child, scope)
             return
@@ -347,9 +378,14 @@ class TypeChecker:
             return
 
         if isinstance(statement, RaiseStmt):
-            value_type = self._check_expr(statement.value, scope)
-            if value_type == ValueType.VOID:
-                self._error(statement, "cannot raise a void expression")
+            if statement.value is not None:
+                value_type = self._check_expr(statement.value, scope)
+                if value_type == ValueType.VOID:
+                    self._error(statement, "cannot raise a void expression")
+            if statement.cause is not None:
+                cause_type = self._check_expr(statement.cause, scope)
+                if cause_type == ValueType.VOID:
+                    self._error(statement, "cannot raise from a void expression")
 
     def _check_expr(self, expr, scope: Scope) -> ValueType:
         if isinstance(expr, ConstantExpr):
@@ -364,7 +400,12 @@ class TypeChecker:
         if isinstance(expr, NameExpr):
             if self._is_builtin_function(expr.name):
                 return self._set_expr_type(expr, ValueType.UNKNOWN)
+            if expr.name in self.table.functions:
+                self._check_function(self.table.functions[expr.name])
+                return self._set_expr_type(expr, ValueType.UNKNOWN)
             value_type = scope.lookup(expr.name) or ValueType.UNKNOWN
+            if value_type == ValueType.UNKNOWN and scope.has_wildcard_import():
+                return self._set_expr_type(expr, ValueType.UNKNOWN)
             return self._set_expr_type(expr, value_type)
 
         if isinstance(expr, UnaryExpr):
@@ -373,10 +414,36 @@ class TypeChecker:
                 if operand_type != ValueType.UNKNOWN and not is_numeric(operand_type):
                     self._error(expr, f"unary '-' requires a numeric operand, got {operand_type.value}")
                 return self._set_expr_type(expr, operand_type if operand_type != ValueType.UNKNOWN else ValueType.INT)
+            if expr.op == "+":
+                if operand_type != ValueType.UNKNOWN and not is_numeric(operand_type):
+                    self._error(expr, f"unary '+' requires a numeric operand, got {operand_type.value}")
+                return self._set_expr_type(expr, operand_type if operand_type != ValueType.UNKNOWN else ValueType.INT)
             if expr.op == "not":
                 if operand_type != ValueType.UNKNOWN and not can_truth_test(operand_type):
                     self._error(expr, f"'not' requires a bool or numeric operand, got {operand_type.value}")
                 return self._set_expr_type(expr, ValueType.BOOL)
+            if expr.op == "~":
+                if operand_type != ValueType.UNKNOWN and not is_numeric(operand_type):
+                    self._error(expr, f"unary '~' requires a numeric operand, got {operand_type.value}")
+                return self._set_expr_type(expr, operand_type if operand_type != ValueType.UNKNOWN else ValueType.INT)
+
+        if isinstance(expr, StarredExpr):
+            inner_type = self._check_expr(expr.value, scope)
+            if inner_type == ValueType.VOID:
+                self._error(expr.value, "cannot splat a void value")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
+
+        if isinstance(expr, KwStarredExpr):
+            inner_type = self._check_expr(expr.value, scope)
+            if inner_type == ValueType.VOID:
+                self._error(expr.value, "cannot splat a void value")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
+
+        if isinstance(expr, NamedExpr):
+            value_type = self._check_expr(expr.value, scope)
+            # Scope doesn't track assignments separately; updating the binding is enough.
+            scope.define(expr.target, value_type)
+            return self._set_expr_type(expr, value_type)
 
         if isinstance(expr, BinaryExpr):
             left_type = self._check_expr(expr.left, scope)
@@ -391,6 +458,8 @@ class TypeChecker:
             result = merge_types(left_type, right_type) or ValueType.UNKNOWN
             if expr.op == "/":
                 result = ValueType.FLOAT
+            if expr.op in {"//", "&", "|", "^", "<<", ">>"}:
+                result = ValueType.INT
             return self._set_expr_type(expr, result)
 
         if isinstance(expr, CompareExpr):
@@ -404,6 +473,24 @@ class TypeChecker:
                 if right_type != ValueType.UNKNOWN and not is_numeric(right_type):
                     self._error(expr.right, f"{expr.op} requires numeric operands, got {right_type.value}")
             else:
+                merged = merge_types(left_type, right_type)
+                if merged is None and left_type != ValueType.UNKNOWN and right_type != ValueType.UNKNOWN:
+                    self._error(expr, f"cannot compare {left_type.value} with {right_type.value}")
+            return self._set_expr_type(expr, ValueType.BOOL)
+
+        if isinstance(expr, CompareChainExpr):
+            operand_types = [self._check_expr(operand, scope) for operand in expr.operands]
+            for index, op in enumerate(expr.ops):
+                left_type = operand_types[index]
+                right_type = operand_types[index + 1]
+                if op in {"in", "not in", "is", "is not"}:
+                    continue
+                if op in {"<", "<=", ">", ">="}:
+                    if left_type != ValueType.UNKNOWN and not is_numeric(left_type):
+                        self._error(expr.operands[index], f"{op} requires numeric operands, got {left_type.value}")
+                    if right_type != ValueType.UNKNOWN and not is_numeric(right_type):
+                        self._error(expr.operands[index + 1], f"{op} requires numeric operands, got {right_type.value}")
+                    continue
                 merged = merge_types(left_type, right_type)
                 if merged is None and left_type != ValueType.UNKNOWN and right_type != ValueType.UNKNOWN:
                     self._error(expr, f"cannot compare {left_type.value} with {right_type.value}")
@@ -534,6 +621,20 @@ class TypeChecker:
             self._check_local_function(expr.func_def, scope, local_function)
             return self._set_expr_type(expr, ValueType.UNKNOWN)
 
+        if isinstance(expr, CallValueExpr):
+            callee_type = self._check_expr(expr.callee, scope)
+            if callee_type == ValueType.VOID:
+                self._error(expr.callee, "cannot call a void value")
+            for arg in expr.args:
+                arg_type = self._check_expr(arg, scope)
+                if arg_type == ValueType.VOID:
+                    self._error(arg, "cannot pass a void expression as an argument")
+            for arg in expr.kwargs.values():
+                arg_type = self._check_expr(arg, scope)
+                if arg_type == ValueType.VOID:
+                    self._error(arg, "cannot pass a void expression as a keyword argument")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
+
         if isinstance(expr, ListCompExpr):
             comp_scope = self._check_comprehension(expr.generators, scope)
             element_type = self._check_expr(expr.element, comp_scope)
@@ -629,6 +730,11 @@ class TypeChecker:
     def _check_delete_target(self, target, scope: Scope) -> None:
         if isinstance(target, NameExpr):
             return
+        if isinstance(target, AttributeExpr):
+            object_type = self._check_expr(target.object, scope)
+            if object_type == ValueType.VOID:
+                self._error(target.object, "cannot delete an attribute from a void value")
+            return
         if isinstance(target, IndexExpr):
             self._check_expr(target.collection, scope)
             self._check_expr(target.index, scope)
@@ -681,6 +787,11 @@ class TypeChecker:
             local_function.return_type = ValueType.VOID
 
     def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
+        # Calls with *args splats are dynamic in shape. Let runtime handle arity.
+        if any(isinstance(arg, StarredExpr) for arg in expr.args):
+            return
+        if getattr(expr, "kw_starred", []):
+            return
         positional_defaults = [object() for _ in range(function.defaults_count)]
         kwonly_defaults = {name: object() for name in function.kwonly_defaults}
         try:
@@ -751,6 +862,13 @@ class TypeChecker:
             return self._set_expr_type(expr, ValueType.TUPLE)
         return self._set_expr_type(expr, ValueType.UNKNOWN)
 
+    @staticmethod
+    def _is_range_call(expr) -> bool:
+        return isinstance(expr, CallExpr) and expr.func_name == "range"
+
+    @staticmethod
+    def _import_binding_name(statement: ImportStmt) -> str:
+        return statement.alias or statement.module.split(".", 1)[0]
     @staticmethod
     def _is_range_call(expr) -> bool:
         return isinstance(expr, CallExpr) and expr.func_name == "range"

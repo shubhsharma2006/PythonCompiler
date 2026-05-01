@@ -7,7 +7,9 @@ from compiler.core.ast import (
     BinaryExpr,
     BoolOpExpr,
     CallExpr,
+    CallValueExpr,
     CompareExpr,
+    CompareChainExpr,
     Comprehension,
     ConstantExpr,
     DeleteStmt,
@@ -29,6 +31,7 @@ from compiler.core.ast import (
     PassStmt,
     PrintStmt,
     Program,
+    RaiseStmt,
     ReturnStmt,
     SetExpr,
     SetCompExpr,
@@ -89,6 +92,11 @@ class ConstantFolder:
         elif isinstance(statement, WithStmt):
             statement.context_expr = self._optimize_expr(statement.context_expr)
             statement.body = self._optimize_statements(statement.body)
+        elif isinstance(statement, RaiseStmt):
+            if statement.value is not None:
+                statement.value = self._optimize_expr(statement.value)
+            if statement.cause is not None:
+                statement.cause = self._optimize_expr(statement.cause)
         elif isinstance(statement, FunctionDef):
             statement.defaults = [self._optimize_expr(default) for default in statement.defaults]
             statement.body = self._optimize_statements(statement.body)
@@ -152,6 +160,33 @@ class ConstantFolder:
                 except Exception:
                     return expr
                 return ConstantExpr(span=expr.span, value=mapping[expr.op])
+            return expr
+
+        if isinstance(expr, CompareChainExpr):
+            expr.operands = [self._optimize_expr(operand) for operand in expr.operands]
+            if all(isinstance(operand, ConstantExpr) for operand in expr.operands):
+                try:
+                    result = True
+                    for index, op in enumerate(expr.ops):
+                        left = expr.operands[index].value
+                        right = expr.operands[index + 1].value
+                        result = {
+                            "==": left == right,
+                            "!=": left != right,
+                            "<": left < right,
+                            "<=": left <= right,
+                            ">": left > right,
+                            ">=": left >= right,
+                            "in": left in right,
+                            "not in": left not in right,
+                            "is": left is right,
+                            "is not": left is not right,
+                        }[op]
+                        if not result:
+                            break
+                except Exception:
+                    return expr
+                return ConstantExpr(span=expr.span, value=result)
             return expr
 
         if isinstance(expr, BoolOpExpr):
@@ -234,6 +269,12 @@ class ConstantFolder:
             return expr
 
         if isinstance(expr, CallExpr):
+            expr.args = [self._optimize_expr(arg) for arg in expr.args]
+            expr.kwargs = {name: self._optimize_expr(arg) for name, arg in expr.kwargs.items()}
+            return expr
+
+        if isinstance(expr, CallValueExpr):
+            expr.callee = self._optimize_expr(expr.callee)
             expr.args = [self._optimize_expr(arg) for arg in expr.args]
             expr.kwargs = {name: self._optimize_expr(arg) for name, arg in expr.kwargs.items()}
             return expr

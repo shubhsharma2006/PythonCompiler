@@ -11,7 +11,9 @@ from compiler.core.ast import (
     AttributeExpr,
     BoolOpExpr,
     CallExpr,
+    CallValueExpr,
     CompareExpr,
+    CompareChainExpr,
     DictCompExpr,
     ClassDef,
     DeleteStmt,
@@ -40,6 +42,8 @@ from compiler.core.ast import (
     SliceExpr,
     UnpackAssignStmt,
     WithStmt,
+    AssignStmt,
+    ExprStmt,
 )
 from compiler.core.types import ValueType
 from compiler.frontend import LexedSource, ParsedModule, lex_source, lower_cst, parse_tokens
@@ -164,6 +168,293 @@ def _program_uses_for_loops(program: Program) -> bool:
     return walk(program.body)
 
 
+def _program_uses_negative_int_exponent(program: Program) -> bool:
+    """Return True if program contains an int power with a negative int literal exponent.
+
+    In Python, `2 ** -1` produces a float (0.5). The native backend currently
+    targets C int/float code with limited implicit promotions. We reject this
+    pattern in native mode to avoid runtime aborts and accidental float
+    conversions.
+    """
+
+    def expr_has_negative_pow(expr) -> bool:
+        if isinstance(expr, BinaryExpr) and expr.op == "**":
+            # Only catch the unambiguous, easy-to-diagnose case: negative int literal.
+            if (
+                isinstance(expr.right, UnaryExpr)
+                and expr.right.op == "-"
+                and hasattr(expr.right.operand, "value")
+                and isinstance(expr.right.operand.value, int)
+            ):
+                return True
+            if hasattr(expr.right, "value") and isinstance(expr.right.value, int) and expr.right.value < 0:
+                return True
+
+        if isinstance(expr, CallExpr):
+            return any(expr_has_negative_pow(arg) for arg in expr.args) or any(
+                expr_has_negative_pow(arg) for arg in expr.kwargs.values()
+            )
+        if isinstance(expr, CallValueExpr):
+            return expr_has_negative_pow(expr.callee) or any(
+                expr_has_negative_pow(arg) for arg in expr.args
+            ) or any(expr_has_negative_pow(arg) for arg in expr.kwargs.values())
+        if isinstance(expr, BinaryExpr):
+            return expr_has_negative_pow(expr.left) or expr_has_negative_pow(expr.right)
+        if isinstance(expr, CompareExpr):
+            return expr_has_negative_pow(expr.left) or expr_has_negative_pow(expr.right)
+        if isinstance(expr, CompareChainExpr):
+            return any(expr_has_negative_pow(operand) for operand in expr.operands)
+        if isinstance(expr, BoolOpExpr):
+            return expr_has_negative_pow(expr.left) or expr_has_negative_pow(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return expr_has_negative_pow(expr.operand)
+        if isinstance(expr, AttributeExpr):
+            return expr_has_negative_pow(expr.object)
+        if isinstance(expr, MethodCallExpr):
+            return (
+                expr_has_negative_pow(expr.object)
+                or any(expr_has_negative_pow(arg) for arg in expr.args)
+                or any(expr_has_negative_pow(arg) for arg in expr.kwargs.values())
+            )
+        if isinstance(expr, (ListExpr, TupleExpr, DictExpr, SetExpr, IndexExpr, SliceExpr)):
+            # If native backend ever supports these, we'll revisit; for now keep it simple.
+            return False
+        return False
+
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef) and walk(statement.body):
+                return True
+            if isinstance(statement, IfStmt):
+                if expr_has_negative_pow(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            if isinstance(statement, WhileStmt):
+                if expr_has_negative_pow(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            if isinstance(statement, ForStmt):
+                if expr_has_negative_pow(statement.iterator) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            if isinstance(statement, TryStmt):
+                if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers):
+                    return True
+            if isinstance(statement, AssignStmt):
+                if expr_has_negative_pow(statement.value):
+                    return True
+            if isinstance(statement, AttributeAssignStmt):
+                if expr_has_negative_pow(statement.object) or expr_has_negative_pow(statement.value):
+                    return True
+            if isinstance(statement, PrintStmt):
+                if any(expr_has_negative_pow(value) for value in statement.values):
+                    return True
+            if hasattr(statement, "expr") and expr_has_negative_pow(getattr(statement, "expr")):
+                return True
+            if hasattr(statement, "value") and expr_has_negative_pow(getattr(statement, "value")):
+                return True
+        return False
+
+    return walk(program.body)
+
+
+def _program_uses_mixed_numeric_ops(program: Program) -> bool:
+    """Return True if program uses mixed int/float operands for '//' or '**'.
+
+    VM mode follows Python semantics for these mixed operations. Native mode is
+    currently conservative and uses int-only helpers for '//' and '**'. Until
+    the native IR and codegen can model these mixed-type semantics cleanly, we
+    reject them with a diagnostic.
+    """
+
+    def expr_is_float_literal(expr) -> bool:
+        return hasattr(expr, "value") and isinstance(getattr(expr, "value"), float)
+
+    def expr_is_int_literal(expr) -> bool:
+        return hasattr(expr, "value") and isinstance(getattr(expr, "value"), int)
+
+    def expr_has_mixed(expr) -> bool:
+        if isinstance(expr, BinaryExpr) and expr.op in {"//", "**"}:
+            # Only detect easy, unambiguous cases (literals) for now.
+            left_float = expr_is_float_literal(expr.left)
+            right_float = expr_is_float_literal(expr.right)
+            left_int = expr_is_int_literal(expr.left)
+            right_int = expr_is_int_literal(expr.right)
+            if (left_float and right_int) or (left_int and right_float):
+                return True
+
+        if isinstance(expr, CallExpr):
+            return any(expr_has_mixed(arg) for arg in expr.args) or any(
+                expr_has_mixed(arg) for arg in expr.kwargs.values()
+            )
+        if isinstance(expr, CallValueExpr):
+            return expr_has_mixed(expr.callee) or any(expr_has_mixed(arg) for arg in expr.args) or any(
+                expr_has_mixed(arg) for arg in expr.kwargs.values()
+            )
+        if isinstance(expr, BinaryExpr):
+            return expr_has_mixed(expr.left) or expr_has_mixed(expr.right)
+        if isinstance(expr, CompareExpr):
+            return expr_has_mixed(expr.left) or expr_has_mixed(expr.right)
+        if isinstance(expr, CompareChainExpr):
+            return any(expr_has_mixed(operand) for operand in expr.operands)
+        if isinstance(expr, BoolOpExpr):
+            return expr_has_mixed(expr.left) or expr_has_mixed(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return expr_has_mixed(expr.operand)
+        if isinstance(expr, AttributeExpr):
+            return expr_has_mixed(expr.object)
+        if isinstance(expr, MethodCallExpr):
+            return expr_has_mixed(expr.object) or any(expr_has_mixed(arg) for arg in expr.args) or any(
+                expr_has_mixed(arg) for arg in expr.kwargs.values()
+            )
+        return False
+
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef) and walk(statement.body):
+                return True
+            if isinstance(statement, IfStmt):
+                if expr_has_mixed(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            if isinstance(statement, WhileStmt):
+                if expr_has_mixed(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            if isinstance(statement, ForStmt):
+                if expr_has_mixed(statement.iterator) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            if isinstance(statement, TryStmt):
+                if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers):
+                    return True
+            if isinstance(statement, AssignStmt):
+                if expr_has_mixed(statement.value):
+                    return True
+            if isinstance(statement, AttributeAssignStmt):
+                if expr_has_mixed(statement.object) or expr_has_mixed(statement.value):
+                    return True
+            if isinstance(statement, PrintStmt):
+                if any(expr_has_mixed(value) for value in statement.values):
+                    return True
+            if isinstance(statement, ExprStmt):
+                if expr_has_mixed(statement.expr):
+                    return True
+            if hasattr(statement, "value") and expr_has_mixed(getattr(statement, "value")):
+                return True
+        return False
+
+    return walk(program.body)
+
+
+def _program_uses_call_kwargs_splats(program: Program) -> bool:
+    """Return True if any call expression uses a **kwargs splat (kw_starred).
+
+    VM mode supports **kwargs splats. Native mode doesn't currently model kwargs
+    dict construction/merging or kw-only binding in IR/codegen, so we reject.
+    """
+
+    def expr_has(expr) -> bool:
+        if hasattr(expr, "kw_starred") and getattr(expr, "kw_starred"):
+            return True
+        if isinstance(expr, CallExpr):
+            return any(expr_has(arg) for arg in expr.args) or any(expr_has(v) for v in expr.kwargs.values())
+        if isinstance(expr, CallValueExpr):
+            return expr_has(expr.callee) or any(expr_has(arg) for arg in expr.args) or any(expr_has(v) for v in expr.kwargs.values())
+        if isinstance(expr, MethodCallExpr):
+            return expr_has(expr.object) or any(expr_has(arg) for arg in expr.args) or any(expr_has(v) for v in expr.kwargs.values())
+        if isinstance(expr, BinaryExpr):
+            return expr_has(expr.left) or expr_has(expr.right)
+        if isinstance(expr, CompareExpr):
+            return expr_has(expr.left) or expr_has(expr.right)
+        if isinstance(expr, CompareChainExpr):
+            return any(expr_has(operand) for operand in expr.operands)
+        if isinstance(expr, BoolOpExpr):
+            return expr_has(expr.left) or expr_has(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return expr_has(expr.operand)
+        if isinstance(expr, AttributeExpr):
+            return expr_has(expr.object)
+        if isinstance(expr, (ListExpr, TupleExpr, DictExpr, SetExpr, IndexExpr, SliceExpr)):
+            return False
+        return False
+
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef) and walk(statement.body):
+                return True
+            if isinstance(statement, IfStmt) and (expr_has(statement.condition) or walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, WhileStmt) and (expr_has(statement.condition) or walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, ForStmt) and (expr_has(statement.iterator) or walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, TryStmt) and (walk(statement.body) or any(walk(h.body) for h in statement.handlers)):
+                return True
+            if isinstance(statement, AssignStmt) and expr_has(statement.value):
+                return True
+            if isinstance(statement, AttributeAssignStmt) and (expr_has(statement.object) or expr_has(statement.value)):
+                return True
+            if isinstance(statement, PrintStmt) and any(expr_has(value) for value in statement.values):
+                return True
+            if hasattr(statement, "expr") and expr_has(getattr(statement, "expr")):
+                return True
+            if hasattr(statement, "value") and expr_has(getattr(statement, "value")):
+                return True
+        return False
+
+    return walk(program.body)
+
+
+def _program_uses_walrus(program: Program) -> bool:
+    """Return True if any expression is a NamedExpr (walrus :=)."""
+
+    def expr_has(expr) -> bool:
+        if type(expr).__name__ == "NamedExpr":
+            return True
+        if isinstance(expr, CallExpr):
+            return any(expr_has(arg) for arg in expr.args) or any(expr_has(v) for v in expr.kwargs.values())
+        if isinstance(expr, CallValueExpr):
+            return expr_has(expr.callee) or any(expr_has(arg) for arg in expr.args) or any(expr_has(v) for v in expr.kwargs.values())
+        if isinstance(expr, MethodCallExpr):
+            return expr_has(expr.object) or any(expr_has(arg) for arg in expr.args) or any(expr_has(v) for v in expr.kwargs.values())
+        if isinstance(expr, BinaryExpr):
+            return expr_has(expr.left) or expr_has(expr.right)
+        if isinstance(expr, CompareExpr):
+            return expr_has(expr.left) or expr_has(expr.right)
+        if isinstance(expr, CompareChainExpr):
+            return any(expr_has(operand) for operand in expr.operands)
+        if isinstance(expr, BoolOpExpr):
+            return expr_has(expr.left) or expr_has(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return expr_has(expr.operand)
+        if isinstance(expr, AttributeExpr):
+            return expr_has(expr.object)
+        if isinstance(expr, (ListExpr, TupleExpr, DictExpr, SetExpr, IndexExpr, SliceExpr)):
+            return False
+        return False
+
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef) and walk(statement.body):
+                return True
+            if isinstance(statement, IfStmt) and (expr_has(statement.condition) or walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, WhileStmt) and (expr_has(statement.condition) or walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, ForStmt) and (expr_has(statement.iterator) or walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, TryStmt) and (walk(statement.body) or any(walk(h.body) for h in statement.handlers)):
+                return True
+            if isinstance(statement, AssignStmt) and expr_has(statement.value):
+                return True
+            if isinstance(statement, AttributeAssignStmt) and (expr_has(statement.object) or expr_has(statement.value)):
+                return True
+            if isinstance(statement, PrintStmt) and any(expr_has(value) for value in statement.values):
+                return True
+            if hasattr(statement, "expr") and expr_has(getattr(statement, "expr")):
+                return True
+            if hasattr(statement, "value") and expr_has(getattr(statement, "value")):
+                return True
+        return False
+
+    return walk(program.body)
+
+
 def _expr_uses_container_features(expr) -> bool:
     if isinstance(expr, (ListExpr, TupleExpr, DictExpr, SetExpr, IndexExpr, ListCompExpr, SetCompExpr, DictCompExpr)):
         return True
@@ -173,10 +464,16 @@ def _expr_uses_container_features(expr) -> bool:
         return any(_expr_uses_container_features(arg) for arg in expr.args) or any(
             _expr_uses_container_features(arg) for arg in expr.kwargs.values()
         )
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_container_features(expr.callee) or any(_expr_uses_container_features(arg) for arg in expr.args) or any(
+            _expr_uses_container_features(arg) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, BinaryExpr):
         return _expr_uses_container_features(expr.left) or _expr_uses_container_features(expr.right)
     if isinstance(expr, CompareExpr):
         return _expr_uses_container_features(expr.left) or _expr_uses_container_features(expr.right)
+    if isinstance(expr, CompareChainExpr):
+        return any(_expr_uses_container_features(operand) for operand in expr.operands)
     if isinstance(expr, BoolOpExpr):
         return _expr_uses_container_features(expr.left) or _expr_uses_container_features(expr.right)
     if isinstance(expr, UnaryExpr):
@@ -221,11 +518,98 @@ def _program_uses_container_features(program: Program) -> bool:
     return walk(program.body)
 
 
+def _expr_uses_compare_chains(expr) -> bool:
+    if isinstance(expr, CompareChainExpr):
+        return True
+    if isinstance(expr, BinaryExpr):
+        return _expr_uses_compare_chains(expr.left) or _expr_uses_compare_chains(expr.right)
+    if isinstance(expr, BoolOpExpr):
+        return _expr_uses_compare_chains(expr.left) or _expr_uses_compare_chains(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return _expr_uses_compare_chains(expr.operand)
+    if isinstance(expr, CompareExpr):
+        return _expr_uses_compare_chains(expr.left) or _expr_uses_compare_chains(expr.right)
+    if isinstance(expr, CallExpr):
+        return any(_expr_uses_compare_chains(arg) for arg in expr.args) or any(
+            _expr_uses_compare_chains(arg) for arg in expr.kwargs.values()
+        )
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_compare_chains(expr.callee) or any(_expr_uses_compare_chains(arg) for arg in expr.args) or any(
+            _expr_uses_compare_chains(arg) for arg in expr.kwargs.values()
+        )
+    if isinstance(expr, AttributeExpr):
+        return _expr_uses_compare_chains(expr.object)
+    if isinstance(expr, MethodCallExpr):
+        return _expr_uses_compare_chains(expr.object) or any(_expr_uses_compare_chains(arg) for arg in expr.args) or any(
+            _expr_uses_compare_chains(arg) for arg in expr.kwargs.values()
+        )
+    if isinstance(expr, IndexExpr):
+        return _expr_uses_compare_chains(expr.collection) or _expr_uses_compare_chains(expr.index)
+    if isinstance(expr, SliceExpr):
+        return any(part is not None and _expr_uses_compare_chains(part) for part in (expr.lower, expr.upper, expr.step))
+    if isinstance(expr, (ListExpr, TupleExpr, SetExpr)):
+        return any(_expr_uses_compare_chains(element) for element in expr.elements)
+    if isinstance(expr, DictExpr):
+        return any(_expr_uses_compare_chains(key) for key in expr.keys) or any(
+            _expr_uses_compare_chains(value) for value in expr.values
+        )
+    if isinstance(expr, ListCompExpr):
+        return _expr_uses_compare_chains(expr.element) or any(_expr_uses_compare_chains(generator.iterator) or any(
+            _expr_uses_compare_chains(condition) for condition in generator.ifs
+        ) for generator in expr.generators)
+    if isinstance(expr, SetCompExpr):
+        return _expr_uses_compare_chains(expr.element) or any(_expr_uses_compare_chains(generator.iterator) or any(
+            _expr_uses_compare_chains(condition) for condition in generator.ifs
+        ) for generator in expr.generators)
+    if isinstance(expr, DictCompExpr):
+        return _expr_uses_compare_chains(expr.key) or _expr_uses_compare_chains(expr.value) or any(
+            _expr_uses_compare_chains(generator.iterator) or any(_expr_uses_compare_chains(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    return False
+
+
+def _program_uses_compare_chains(program: Program) -> bool:
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef) and walk(statement.body):
+                return True
+            if isinstance(statement, IfStmt):
+                if _expr_uses_compare_chains(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, WhileStmt):
+                if _expr_uses_compare_chains(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, ForStmt):
+                if _expr_uses_compare_chains(statement.iterator) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, TryStmt):
+                if walk(statement.body) or walk(statement.orelse) or walk(statement.finalbody) or any(walk(handler.body) for handler in statement.handlers):
+                    return True
+            elif isinstance(statement, WithStmt):
+                if _expr_uses_compare_chains(statement.context_expr) or walk(statement.body):
+                    return True
+            else:
+                value = getattr(statement, "value", None)
+                expr = getattr(statement, "expr", None)
+                if value is not None and _expr_uses_compare_chains(value):
+                    return True
+                if expr is not None and _expr_uses_compare_chains(expr):
+                    return True
+        return False
+
+    return walk(program.body)
+
+
 def _expr_uses_object_features(expr) -> bool:
     if isinstance(expr, (AttributeExpr, MethodCallExpr)):
         return True
     if isinstance(expr, CallExpr):
         return any(_expr_uses_object_features(arg) for arg in expr.args)
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_object_features(expr.callee) or any(_expr_uses_object_features(arg) for arg in expr.args) or any(
+            _expr_uses_object_features(arg) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, BinaryExpr):
         return _expr_uses_object_features(expr.left) or _expr_uses_object_features(expr.right)
     if isinstance(expr, CompareExpr):
@@ -305,6 +689,13 @@ def _expr_uses_call_signature_features(expr) -> bool:
         return (
             bool(expr.kwargs)
             or _expr_uses_call_signature_features(expr.object)
+            or any(_expr_uses_call_signature_features(arg) for arg in expr.args)
+            or any(_expr_uses_call_signature_features(arg) for arg in expr.kwargs.values())
+        )
+    if isinstance(expr, CallValueExpr):
+        return (
+            bool(expr.kwargs)
+            or _expr_uses_call_signature_features(expr.callee)
             or any(_expr_uses_call_signature_features(arg) for arg in expr.args)
             or any(_expr_uses_call_signature_features(arg) for arg in expr.kwargs.values())
         )
@@ -410,6 +801,10 @@ def _expr_uses_slicing(expr) -> bool:
         return _expr_uses_slicing(expr.collection) or _expr_uses_slicing(expr.index)
     if isinstance(expr, CallExpr):
         return any(_expr_uses_slicing(arg) for arg in expr.args) or any(_expr_uses_slicing(arg) for arg in expr.kwargs.values())
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_slicing(expr.callee) or any(_expr_uses_slicing(arg) for arg in expr.args) or any(
+            _expr_uses_slicing(arg) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, MethodCallExpr):
         return (
             _expr_uses_slicing(expr.object)
@@ -519,6 +914,10 @@ def _expr_uses_vm_only_builtin_calls(expr) -> bool:
         return any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.args) or any(
             _expr_uses_vm_only_builtin_calls(arg) for arg in expr.kwargs.values()
         )
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_vm_only_builtin_calls(expr.callee) or any(_expr_uses_vm_only_builtin_calls(arg) for arg in expr.args) or any(
+            _expr_uses_vm_only_builtin_calls(arg) for arg in expr.kwargs.values()
+        )
     if isinstance(expr, BinaryExpr):
         return _expr_uses_vm_only_builtin_calls(expr.left) or _expr_uses_vm_only_builtin_calls(expr.right)
     if isinstance(expr, CompareExpr):
@@ -593,6 +992,10 @@ def _expr_uses_vm_only_string_features(expr, semantic: SemanticModel) -> bool:
         return any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.args) or any(
             _expr_uses_vm_only_string_features(arg, semantic) for arg in expr.kwargs.values()
         )
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_vm_only_string_features(expr.callee, semantic) or any(
+            _expr_uses_vm_only_string_features(arg, semantic) for arg in expr.args
+        ) or any(_expr_uses_vm_only_string_features(arg, semantic) for arg in expr.kwargs.values())
     if isinstance(expr, CompareExpr):
         return _expr_uses_vm_only_string_features(expr.left, semantic) or _expr_uses_vm_only_string_features(expr.right, semantic)
     if isinstance(expr, BoolOpExpr):
@@ -659,13 +1062,34 @@ def _program_uses_vm_only_print_or_string_features(program: Program, semantic: S
 def _module_name_for_filename(filename: str) -> str:
     if filename == "<stdin>":
         return "__main__"
-    return os.path.splitext(os.path.basename(filename))[0]
+    abs_filename = os.path.abspath(filename)
+    basename = os.path.basename(abs_filename)
+    module_name = os.path.splitext(basename)[0]
+    if basename == "__init__.py":
+        parts: list[str] = []
+    else:
+        parts = [module_name]
+    current_dir = os.path.dirname(abs_filename)
+    while os.path.exists(os.path.join(current_dir, "__init__.py")):
+        parts.insert(0, os.path.basename(current_dir))
+        parent_dir = os.path.dirname(current_dir)
+        if parent_dir == current_dir:
+            break
+        current_dir = parent_dir
+    return ".".join(parts) if parts else "__main__"
 
 
 def _resolve_import_path(module_name: str, requester_filename: str) -> str:
     requester_dir = os.path.dirname(os.path.abspath(requester_filename)) or os.getcwd()
     module_parts = module_name.split(".")
-    search_roots = [requester_dir]
+    search_roots: list[str] = []
+    current_root = requester_dir
+    while True:
+        search_roots.append(current_root)
+        parent_root = os.path.dirname(current_root)
+        if parent_root == current_root:
+            break
+        current_root = parent_root
 
     for root in search_roots:
         module_file = os.path.join(root, *module_parts) + ".py"
@@ -801,8 +1225,44 @@ def compile_source(
         result.errors.error("Codegen", "native compilation does not support default or keyword arguments yet")
         result.success = False
         return result
+    if _program_uses_compare_chains(result.program):
+        result.errors.error("Codegen", "native compilation does not support comparison chaining yet")
+        result.success = False
+        return result
     if _program_uses_vm_only_builtin_calls(result.program):
         result.errors.error("Codegen", "native compilation does not support these builtin calls yet")
+        result.success = False
+        return result
+
+    if _program_uses_negative_int_exponent(result.program):
+        result.errors.error(
+            "Codegen",
+            "native compilation does not support negative integer exponents for '**' yet",
+        )
+        result.success = False
+        return result
+
+    if _program_uses_mixed_numeric_ops(result.program):
+        result.errors.error(
+            "Codegen",
+            "native compilation does not support mixed int/float operands for '//' or '**' yet",
+        )
+        result.success = False
+        return result
+
+    if _program_uses_call_kwargs_splats(result.program):
+        result.errors.error(
+            "Codegen",
+            "native compilation does not support call-site **kwargs splats yet",
+        )
+        result.success = False
+        return result
+
+    if _program_uses_walrus(result.program):
+        result.errors.error(
+            "Codegen",
+            "native compilation does not support the walrus operator ':=' yet",
+        )
         result.success = False
         return result
 

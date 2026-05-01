@@ -41,9 +41,10 @@ class ImportStmt(Statement):
 
 @dataclass
 class FromImportStmt(Statement):
-    module: str
+    module: str | None
     name: str
     alias: str | None = None
+    level: int = 0
 
 
 @dataclass
@@ -82,6 +83,22 @@ class AttributeAssignStmt(Statement):
 @dataclass
 class UnpackAssignStmt(Statement):
     targets: list[str]
+    value: Expression
+
+
+@dataclass
+class StarUnpackAssignStmt(Statement):
+    """Assignment with a single starred target.
+
+    Example: a, *rest, b = value
+    - prefix targets: ["a"]
+    - starred_target: "rest"
+    - suffix targets: ["b"]
+    """
+
+    prefix_targets: list[str]
+    starred_target: str
+    suffix_targets: list[str]
     value: Expression
 
 
@@ -140,7 +157,7 @@ class WhileStmt(Statement):
 
 @dataclass
 class ForStmt(Statement):
-    target: str
+    target: str | list[str]
     iterator: Expression
     body: list[Statement]
     orelse: list[Statement] = field(default_factory=list)
@@ -167,12 +184,14 @@ class ExceptHandler(Node):
 class TryStmt(Statement):
     body: list[Statement]
     handlers: list[ExceptHandler]
+    orelse: list[Statement] = field(default_factory=list)
     finalbody: list[Statement] = field(default_factory=list)
 
 
 @dataclass
 class RaiseStmt(Statement):
-    value: Expression
+    value: Expression | None
+    cause: Expression | None = None
 
 
 @dataclass
@@ -211,6 +230,12 @@ class CompareExpr(Expression):
 
 
 @dataclass
+class CompareChainExpr(Expression):
+    operands: list[Expression]
+    ops: list[str]
+
+
+@dataclass
 class BoolOpExpr(Expression):
     op: str
     left: Expression
@@ -234,6 +259,15 @@ class CallExpr(Expression):
     func_name: str
     args: list[Expression]
     kwargs: dict[str, Expression] = field(default_factory=dict)
+    kw_starred: list[KwStarredExpr] = field(default_factory=list)
+
+
+@dataclass
+class CallValueExpr(Expression):
+    callee: Expression
+    args: list[Expression]
+    kwargs: dict[str, Expression] = field(default_factory=dict)
+    kw_starred: list[KwStarredExpr] = field(default_factory=list)
 
 
 @dataclass
@@ -244,6 +278,28 @@ class ListExpr(Expression):
 @dataclass
 class TupleExpr(Expression):
     elements: list[Expression]
+
+
+@dataclass
+class StarredExpr(Expression):
+    """Represents a starred expression in a call site, like f(*args)."""
+
+    value: Expression
+
+
+@dataclass
+class KwStarredExpr(Expression):
+    """Represents a keyword-arg dict unpacking in a call site, like f(**d)."""
+
+    value: Expression
+
+
+@dataclass
+class NamedExpr(Expression):
+    """Walrus operator expression: (target := value)."""
+
+    target: str
+    value: Expression
 
 
 @dataclass
@@ -308,3 +364,9 @@ class MethodCallExpr(Expression):
     method_name: str
     args: list[Expression]
     kwargs: dict[str, Expression] = field(default_factory=dict)
+    kw_starred: list[KwStarredExpr] = field(default_factory=list)
+
+
+@dataclass
+class YieldFromExpr(Expression):
+    value: Expression

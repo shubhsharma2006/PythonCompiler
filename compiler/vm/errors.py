@@ -12,6 +12,7 @@ class ReturnSignal(Exception):
 
 
 class RaisedSignal(Exception):
-    def __init__(self, value):
+    def __init__(self, value, cause=None):
         super().__init__()
         self.value = value
+        self.cause = cause

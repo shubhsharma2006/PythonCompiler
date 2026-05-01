@@ -128,6 +128,7 @@ def py_truthy(value: object) -> bool:
 def py_binary_op(op: str, left: object, right: object) -> object:
     left = unwrap_runtime_value(left)
     right = unwrap_runtime_value(right)
+
     if op == "+":
         return left + right
     if op == "-":
@@ -138,12 +139,28 @@ def py_binary_op(op: str, left: object, right: object) -> object:
         return left / right
     if op == "%":
         return left % right
+    if op == "//":
+        return left // right
+    if op == "**":
+        return left ** right
+    if op == "&":
+        return left & right
+    if op == "|":
+        return left | right
+    if op == "^":
+        return left ^ right
+    if op == "<<":
+        return left << right
+    if op == ">>":
+        return left >> right
+
     raise VMError(f"unsupported binary operator {op!r}")
 
 
 def py_compare_op(op: str, left: object, right: object) -> bool:
     left = unwrap_runtime_value(left)
     right = unwrap_runtime_value(right)
+
     if op == "==":
         return left == right
     if op == "!=":
@@ -164,21 +181,32 @@ def py_compare_op(op: str, left: object, right: object) -> bool:
         return left is right
     if op == "is not":
         return left is not right
+
     raise VMError(f"unsupported comparison operator {op!r}")
 
 
 def py_unary_op(op: str, operand: object) -> object:
     operand = unwrap_runtime_value(operand)
+
     if op == "-":
         return -operand
+
+    if op == "+":
+        return +operand
+
     if op == "not":
         return not py_truthy(operand)
+
+    if op == "~":
+        return ~operand
+
     raise VMError(f"unsupported unary operator {op!r}")
 
 
 def py_index_get(collection: object, index: object) -> object:
     collection = unwrap_runtime_value(collection)
     index = unwrap_runtime_value(index)
+
     try:
         return collection[index]
     except (IndexError, KeyError, TypeError) as exc:
@@ -189,110 +217,227 @@ def py_index_set(collection: object, index: object, value: object) -> None:
     collection = unwrap_runtime_value(collection)
     index = unwrap_runtime_value(index)
     value = unwrap_runtime_value(value)
+
     try:
         collection[index] = value
     except (IndexError, KeyError, TypeError) as exc:
         raise VMError(str(exc)) from None
 
 
-def class_is_subclass(subclass: ClassObject, superclass: ClassObject | str) -> bool:
+def py_index_delete(collection: object, index: object) -> None:
+    collection = unwrap_runtime_value(collection)
+    index = unwrap_runtime_value(index)
+
+    try:
+        del collection[index]
+    except (IndexError, KeyError, TypeError) as exc:
+        raise VMError(str(exc)) from None
+
+
+def class_is_subclass(
+    subclass: ClassObject,
+    superclass: ClassObject | str,
+) -> bool:
     if isinstance(superclass, str):
         if subclass.name == superclass:
             return True
     elif subclass is superclass:
         return True
+
     for base in subclass.bases:
         if class_is_subclass(base, superclass):
             return True
+
     return False
 
 
 def _find_class_member(class_object: ClassObject, attr_name: str) -> object:
     if attr_name in class_object.attributes:
         return class_object.attributes[attr_name]
+
     if attr_name in class_object.methods:
         return class_object.methods[attr_name]
+
     for base in class_object.bases:
         value = _find_class_member(base, attr_name)
         if value is not _MISSING:
             return value
+
     return _MISSING
 
 
 def _find_super_member(class_object: ClassObject, attr_name: str) -> object:
     for base in class_object.bases:
         value = _find_class_member(base, attr_name)
+
         if value is not _MISSING:
             return value
+
     return _MISSING
 
 
 def py_load_attr(obj: object, attr_name: str) -> object:
     obj = unwrap_runtime_value(obj)
+
     if isinstance(obj, ModuleObject):
         if attr_name not in obj.namespace:
-            raise VMError(f"module {obj.name!r} has no attribute {attr_name!r}")
+            raise VMError(
+                f"module {obj.name!r} has no attribute {attr_name!r}"
+            )
+
         return obj.namespace[attr_name]
+
     if isinstance(obj, InstanceObject):
         if attr_name in obj.fields:
             return obj.fields[attr_name]
+
         member = _find_class_member(obj.class_object, attr_name)
+
         if member is not _MISSING:
             if isinstance(member, BytecodeFunction) or callable(member):
                 return BoundMethod(instance=obj, function=member)
+
             return member
-        raise VMError(f"instance of {obj.class_object.name!r} has no attribute {attr_name!r}")
+
+        raise VMError(
+            f"instance of {obj.class_object.name!r} "
+            f"has no attribute {attr_name!r}"
+        )
+
     if isinstance(obj, ClassObject):
         member = _find_class_member(obj, attr_name)
+
         if member is not _MISSING:
             return member
-        raise VMError(f"class {obj.name!r} has no attribute {attr_name!r}")
+
+        raise VMError(
+            f"class {obj.name!r} has no attribute {attr_name!r}"
+        )
+
     if isinstance(obj, SuperObject):
         member = _find_super_member(obj.owner_class, attr_name)
+
         if member is _MISSING:
-            raise VMError(f"super object for {obj.owner_class.name!r} has no attribute {attr_name!r}")
+            raise VMError(
+                f"super object for {obj.owner_class.name!r} "
+                f"has no attribute {attr_name!r}"
+            )
+
         if isinstance(member, BytecodeFunction) or callable(member):
             return BoundMethod(instance=obj.instance, function=member)
+
         return member
+
     if hasattr(obj, attr_name):
         return getattr(obj, attr_name)
-    raise VMError(f"cannot access attribute {attr_name!r} on {type(obj).__name__}")
+
+    raise VMError(
+        f"cannot access attribute {attr_name!r} "
+        f"on {type(obj).__name__}"
+    )
 
 
 def py_store_attr(obj: object, attr_name: str, value: object) -> None:
     obj = unwrap_runtime_value(obj)
     value = unwrap_runtime_value(value)
+
     if isinstance(obj, InstanceObject):
         obj.fields[attr_name] = value
         return
+
     if isinstance(obj, ClassObject):
         obj.attributes[attr_name] = value
         return
+
     if isinstance(obj, ModuleObject):
         obj.namespace[attr_name] = value
         return
-    raise VMError(f"cannot set attribute {attr_name!r} on {type(obj).__name__}")
+
+    raise VMError(
+        f"cannot set attribute {attr_name!r} "
+        f"on {type(obj).__name__}"
+    )
 
 
-def py_matches_exception(value: object, expected: object | str | None) -> bool:
+def py_delete_attr(obj: object, attr_name: str) -> None:
+    obj = unwrap_runtime_value(obj)
+
+    if isinstance(obj, InstanceObject):
+        if attr_name not in obj.fields:
+            raise VMError(
+                f"instance of {obj.class_object.name!r} "
+                f"has no attribute {attr_name!r}"
+            )
+
+        del obj.fields[attr_name]
+        return
+
+    if isinstance(obj, ClassObject):
+        if attr_name not in obj.attributes:
+            raise VMError(
+                f"class {obj.name!r} has no attribute {attr_name!r}"
+            )
+
+        del obj.attributes[attr_name]
+        return
+
+    if isinstance(obj, ModuleObject):
+        if attr_name not in obj.namespace:
+            raise VMError(
+                f"module {obj.name!r} has no attribute {attr_name!r}"
+            )
+
+        del obj.namespace[attr_name]
+        return
+
+    if hasattr(obj, attr_name):
+        try:
+            delattr(obj, attr_name)
+            return
+        except AttributeError as exc:
+            raise VMError(str(exc)) from None
+
+    raise VMError(
+        f"cannot delete attribute {attr_name!r} "
+        f"on {type(obj).__name__}"
+    )
+
+
+def py_matches_exception(
+    value: object,
+    expected: object | str | None,
+) -> bool:
     value = unwrap_runtime_value(value)
+
     if expected is None:
         return True
+
     if isinstance(expected, tuple):
-        return any(py_matches_exception(value, item) for item in expected)
+        return any(
+            py_matches_exception(value, item)
+            for item in expected
+        )
+
     expected = unwrap_runtime_value(expected)
+
     if isinstance(expected, str):
         if isinstance(value, InstanceObject):
             return class_is_subclass(value.class_object, expected)
+
         if isinstance(value, ClassObject):
             return class_is_subclass(value, expected)
+
         return type(value).__name__ == expected
+
     if isinstance(expected, ClassObject):
         if isinstance(value, InstanceObject):
             return class_is_subclass(value.class_object, expected)
+
         if isinstance(value, ClassObject):
             return class_is_subclass(value, expected)
+
         return False
+
     try:
         return isinstance(value, expected)
     except TypeError:
@@ -305,11 +450,28 @@ def py_invoke_callable(
     module: ModuleObject,
     *,
     kwargs: dict[str, object] | None = None,
-    execute_function: Callable[[BytecodeFunction, dict[str, object], ModuleObject, list[dict[str, object]] | None], object],
+    execute_function: Callable[
+        [
+            BytecodeFunction,
+            dict[str, object],
+            ModuleObject,
+            list[dict[str, object]] | None,
+        ],
+        object,
+    ],
 ) -> object:
     callable_obj = unwrap_runtime_value(callable_obj)
-    args = [unwrap_runtime_value(arg) for arg in args]
-    kwargs = {key: unwrap_runtime_value(value) for key, value in (kwargs or {}).items()}
+
+    args = [
+        unwrap_runtime_value(arg)
+        for arg in args
+    ]
+
+    kwargs = {
+        key: unwrap_runtime_value(value)
+        for key, value in (kwargs or {}).items()
+    }
+
     if isinstance(callable_obj, BytecodeFunction):
         bound_args = bind_function_args(
             callable_obj.name,
@@ -322,10 +484,25 @@ def py_invoke_callable(
             vararg_name=callable_obj.vararg_name,
             kwarg_name=callable_obj.kwarg_name,
         )
-        return execute_function(callable_obj, bound_args, module, None)
+
+        return execute_function(
+            callable_obj,
+            bound_args,
+            module,
+            None,
+        )
+
     if isinstance(callable_obj, Closure):
-        defaults = callable_obj.defaults or callable_obj.function.defaults
-        kwonly_defaults = callable_obj.kwonly_defaults or callable_obj.function.kwonly_defaults
+        defaults = (
+            callable_obj.defaults
+            or callable_obj.function.defaults
+        )
+
+        kwonly_defaults = (
+            callable_obj.kwonly_defaults
+            or callable_obj.function.kwonly_defaults
+        )
+
         bound_args = bind_function_args(
             callable_obj.function.name,
             callable_obj.function.params,
@@ -337,7 +514,14 @@ def py_invoke_callable(
             vararg_name=callable_obj.function.vararg_name,
             kwarg_name=callable_obj.function.kwarg_name,
         )
-        return execute_function(callable_obj.function, bound_args, module, callable_obj.closure_scopes)
+
+        return execute_function(
+            callable_obj.function,
+            bound_args,
+            module,
+            callable_obj.closure_scopes,
+        )
+
     if isinstance(callable_obj, BoundMethod):
         if isinstance(callable_obj.function, BytecodeFunction):
             bound_args = bind_function_args(
@@ -351,13 +535,31 @@ def py_invoke_callable(
                 vararg_name=callable_obj.function.vararg_name,
                 kwarg_name=callable_obj.function.kwarg_name,
             )
-            return execute_function(callable_obj.function, bound_args, module, None)
+
+            return execute_function(
+                callable_obj.function,
+                bound_args,
+                module,
+                None,
+            )
+
         if callable(callable_obj.function):
-            return callable_obj.function(callable_obj.instance, *args, **kwargs)
+            return callable_obj.function(
+                callable_obj.instance,
+                *args,
+                **kwargs,
+            )
+
         raise VMError("invalid bound method")
+
     if isinstance(callable_obj, ClassObject):
         instance = InstanceObject(class_object=callable_obj)
-        initializer = _find_class_member(callable_obj, "__init__")
+
+        initializer = _find_class_member(
+            callable_obj,
+            "__init__",
+        )
+
         if isinstance(initializer, BytecodeFunction):
             bound_args = bind_function_args(
                 initializer.name,
@@ -370,15 +572,28 @@ def py_invoke_callable(
                 vararg_name=initializer.vararg_name,
                 kwarg_name=initializer.kwarg_name,
             )
-            execute_function(initializer, bound_args, module, None)
+
+            execute_function(
+                initializer,
+                bound_args,
+                module,
+                None,
+            )
+
         elif args or kwargs:
-            raise VMError(f"class {callable_obj.name!r} takes no arguments")
+            raise VMError(
+                f"class {callable_obj.name!r} "
+                f"takes no arguments"
+            )
+
         return instance
+
     if callable(callable_obj):
         try:
             return callable_obj(*args, **kwargs)
         except TypeError as exc:
             raise VMError(str(exc)) from None
+
     raise VMError(f"cannot call {callable_obj!r}")
 
 
@@ -406,5 +621,6 @@ def bind_function_args(
             vararg_name=vararg_name,
             kwarg_name=kwarg_name,
         )
+
     except ValueError as exc:
         raise VMError(str(exc)) from None

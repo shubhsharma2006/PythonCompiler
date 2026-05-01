@@ -32,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-native", action="store_true", help="Compile the generated C with GCC and execute it")
     parser.add_argument("--run", action="store_true", help="Legacy alias for --run-native")
     parser.add_argument("--dump", choices=["tokens", "ast", "bytecode", "ir"], help="Print an internal representation")
-    parser.add_argument("--no-viz", action="store_true", help="Accepted for compatibility; AST visualization is deprecated")
+    parser.add_argument("--viz-ast", nargs="?", const="ast_output", default=None, help="Render a PNG of the legacy AST to the given basename (default: ast_output)")
+    parser.add_argument("--no-viz", action="store_true", help="Accepted for compatibility; does nothing")
     parser.add_argument("-q", "--quiet", action="store_true", help="Reduce CLI output")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable additional compiler logs")
     return parser
@@ -74,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if result.success:
         _emit_dump(result, args.dump, logger)
+        _maybe_emit_ast_viz(result, args.viz_ast, logger)
         if mode in {"compile-native", "run-native"}:
             logger.ok(f"C output written to {result.output_path}")
         else:
@@ -93,6 +95,29 @@ def main(argv: list[str] | None = None) -> int:
 
     result.errors.report()
     return 1
+
+
+def _maybe_emit_ast_viz(result, viz_ast_basename: str | None, logger: CompilerLogger) -> None:
+    if viz_ast_basename is None:
+        return
+    if result.program is None:
+        logger.warn("AST visualization requested, but lowered AST is missing")
+        return
+
+    try:
+        from ast_viz import visualise_ast  # type: ignore
+
+        path = visualise_ast(result.program, filename=viz_ast_basename, fmt="png")
+        if path:
+            logger.ok(f"AST image written to {path}")
+        else:
+            logger.warn(
+                "AST visualization requested, but graphviz is not available (optional). "
+                "Install with: pip install graphviz && brew install graphviz"
+            )
+    except Exception as exc:
+        # Production rule: visualization must never break compilation.
+        logger.warn(f"Failed to render AST (optional): {exc}")
 
 
 def _emit_dump(result, dump_kind: str | None, logger: CompilerLogger) -> None:

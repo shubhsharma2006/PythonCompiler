@@ -12,6 +12,7 @@ class Scope:
         self.values: dict[str, ValueType] = {}
         self.global_names: set[str] = set()
         self.nonlocal_names: set[str] = set()
+        self.wildcard_imported = False
 
     def define(self, name: str, value_type: ValueType) -> None:
         self.values[name] = value_type
@@ -21,6 +22,9 @@ class Scope:
 
     def declare_nonlocal(self, name: str) -> None:
         self.nonlocal_names.add(name)
+
+    def declare_wildcard_import(self) -> None:
+        self.root().wildcard_imported = True
 
     def lookup(self, name: str) -> ValueType | None:
         if name in self.global_names:
@@ -54,6 +58,14 @@ class Scope:
         while scope.parent is not None:
             scope = scope.parent
         return scope
+
+    def has_wildcard_import(self) -> bool:
+        scope: Scope | None = self
+        while scope is not None:
+            if scope.wildcard_imported:
+                return True
+            scope = scope.parent
+        return False
 
 
 @dataclass

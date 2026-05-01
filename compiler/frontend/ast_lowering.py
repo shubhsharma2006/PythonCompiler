@@ -9,9 +9,11 @@ from compiler.core.ast import (
     BinaryExpr,
     BoolOpExpr,
     CallExpr,
+    CallValueExpr,
     ClassDef,
     Comprehension,
     CompareExpr,
+    CompareChainExpr,
     ConstantExpr,
     DeleteStmt,
     DictExpr,
@@ -40,11 +42,16 @@ from compiler.core.ast import (
     SetExpr,
     SetCompExpr,
     SliceExpr,
+    StarredExpr,
+    KwStarredExpr,
+    NamedExpr,
     SourceSpan,
+    StarUnpackAssignStmt,
     TryStmt,
     TupleExpr,
     UnaryExpr,
     UnpackAssignStmt,
+    StarUnpackAssignStmt,
     WhileStmt,
     WithStmt,
     BreakStmt,
@@ -95,9 +102,35 @@ class PythonSubsetLowerer:
                     return None
                 return AttributeAssignStmt(span=self._span(node), object=obj, attr_name=target.attr, value=value)
             if isinstance(target, (ast.Tuple, ast.List)):
-                if any(isinstance(element, ast.Starred) for element in target.elts):
-                    self._unsupported(node, "starred assignment is not supported yet")
-                    return None
+                starred_indices = [
+                    i for i, element in enumerate(target.elts)
+                    if isinstance(element, ast.Starred)
+                ]
+                if starred_indices:
+                    if len(starred_indices) != 1:
+                        self._unsupported(node, "only a single starred assignment target is supported")
+                        return None
+                    star_index = starred_indices[0]
+                    star_element = target.elts[star_index]
+                    assert isinstance(star_element, ast.Starred)
+                    if not isinstance(star_element.value, ast.Name):
+                        self._unsupported(node, "only simple names may be starred in assignment")
+                        return None
+
+                    prefix = target.elts[:star_index]
+                    suffix = target.elts[star_index + 1 :]
+                    if not all(isinstance(element, ast.Name) for element in prefix + suffix):
+                        self._unsupported(node, "only simple names in unpacking assignment are supported")
+                        return None
+
+                    return StarUnpackAssignStmt(
+                        span=self._span(node),
+                        prefix_targets=[element.id for element in prefix],
+                        starred_target=star_element.value.id,
+                        suffix_targets=[element.id for element in suffix],
+                        value=value,
+                    )
+
                 if not all(isinstance(element, ast.Name) for element in target.elts):
                     self._unsupported(node, "only simple names in unpacking assignment are supported")
                     return None
@@ -153,21 +186,19 @@ class PythonSubsetLowerer:
             return NonlocalStmt(span=self._span(node), names=list(node.names))
 
         if isinstance(node, ast.With):
-            if len(node.items) != 1:
-                self._unsupported(node, "multiple context managers in one with statement are not supported yet")
-                return None
-            item = node.items[0]
-            context_expr = self._lower_expr(item.context_expr)
-            if context_expr is None:
-                return None
-            optional_var = None
-            if item.optional_vars is not None:
-                if not isinstance(item.optional_vars, ast.Name):
-                    self._unsupported(item.optional_vars, "only simple name targets in with-as clauses are supported")
-                    return None
-                optional_var = item.optional_vars.id
             body = self._lower_body(node.body, allow_docstring=True) or []
-            return WithStmt(span=self._span(node), context_expr=context_expr, optional_var=optional_var, body=body)
+            for item in reversed(node.items):
+                context_expr = self._lower_expr(item.context_expr)
+                if context_expr is None:
+                    return None
+                optional_var = None
+                if item.optional_vars is not None:
+                    if not isinstance(item.optional_vars, ast.Name):
+                        self._unsupported(item.optional_vars, "only simple name targets in with-as clauses are supported")
+                        return None
+                    optional_var = item.optional_vars.id
+                body = [WithStmt(span=self._span(item), context_expr=context_expr, optional_var=optional_var, body=body)]
+            return body[0]
 
         if isinstance(node, ast.If):
             condition = self._lower_expr(node.test)
@@ -204,7 +235,18 @@ class PythonSubsetLowerer:
             return WhileStmt(span=self._span(node), condition=condition, body=body, orelse=orelse)
 
         if isinstance(node, ast.For):
-            if not isinstance(node.target, ast.Name):
+            target: str | list[str]
+            if isinstance(node.target, ast.Name):
+                target = node.target.id
+            elif isinstance(node.target, (ast.Tuple, ast.List)):
+                if any(isinstance(element, ast.Starred) for element in node.target.elts):
+                    self._unsupported(node, "starred assignment is not supported yet")
+                    return None
+                if not all(isinstance(element, ast.Name) for element in node.target.elts):
+                    self._unsupported(node, "only simple name loop targets are supported")
+                    return None
+                target = [element.id for element in node.target.elts]
+            else:
                 self._unsupported(node, "only simple name loop targets are supported")
                 return None
             iterator = self._lower_expr(node.iter)
@@ -212,12 +254,9 @@ class PythonSubsetLowerer:
                 return None
             body = self._lower_body(node.body, allow_docstring=True) or []
             orelse = self._lower_body(node.orelse, allow_docstring=True) or []
-            return ForStmt(span=self._span(node), target=node.target.id, iterator=iterator, body=body, orelse=orelse)
+            return ForStmt(span=self._span(node), target=target, iterator=iterator, body=body, orelse=orelse)
 
         if isinstance(node, ast.FunctionDef):
-            if node.decorator_list:
-                self._unsupported(node, "decorators are not supported")
-                return None
             if node.returns is not None:
                 self._unsupported(node, "function return annotations are not supported")
                 return None
@@ -247,7 +286,7 @@ class PythonSubsetLowerer:
             self._function_depth += 1
             body = self._lower_body(node.body, allow_docstring=True) or []
             self._function_depth -= 1
-            return FunctionDef(
+            function_def = FunctionDef(
                 span=self._span(node),
                 name=node.name,
                 params=[arg.arg for arg in node.args.args],
@@ -258,13 +297,16 @@ class PythonSubsetLowerer:
                 vararg=node.args.vararg.arg if node.args.vararg is not None else None,
                 kwarg=node.args.kwarg.arg if node.args.kwarg is not None else None,
             )
+            if not node.decorator_list:
+                return function_def
+            decorated = self._apply_decorators(node.name, node.decorator_list, self._span(node))
+            if decorated is None:
+                return None
+            return [function_def, *decorated]
 
         if isinstance(node, ast.ClassDef):
             if self._function_depth > 0:
                 self._unsupported(node, "nested classes are not supported yet")
-                return None
-            if node.decorator_list:
-                self._unsupported(node, "class decorators are not supported")
                 return None
             if node.keywords:
                 self._unsupported(node, "class keywords are not supported yet")
@@ -293,13 +335,19 @@ class PythonSubsetLowerer:
                 if lowered is None or not isinstance(lowered, FunctionDef):
                     return None
                 methods.append(lowered)
-            return ClassDef(
+            class_def = ClassDef(
                 span=self._span(node),
                 name=node.name,
                 bases=bases,
                 attributes=attributes,
                 methods=methods,
             )
+            if not node.decorator_list:
+                return class_def
+            decorated = self._apply_decorators(node.name, node.decorator_list, self._span(node))
+            if decorated is None:
+                return None
+            return [class_def, *decorated]
 
         if isinstance(node, ast.Import):
             lowered = []
@@ -308,47 +356,52 @@ class PythonSubsetLowerer:
             return lowered
 
         if isinstance(node, ast.ImportFrom):
-            if node.level != 0:
-                self._unsupported(node, "relative imports are not supported")
-                return None
-            if node.module is None:
+            if node.level == 0 and node.module is None:
                 self._unsupported(node, "missing import module is not supported")
                 return None
             lowered = []
             for alias in node.names:
-                if alias.name == "*":
-                    self._unsupported(node, "star imports are not supported")
-                    return None
                 lowered.append(
                     FromImportStmt(
                         span=self._span(node),
                         module=node.module,
                         name=alias.name,
                         alias=alias.asname,
+                        level=node.level,
                     )
                 )
             return lowered
 
+        if isinstance(node, ast.Raise):
+            value = self._lower_expr(node.exc) if node.exc is not None else None
+            if node.exc is not None and value is None:
+                return None
+
+            cause = self._lower_expr(node.cause) if node.cause is not None else None
+            if node.cause is not None and cause is None:
+                return None
+
+            return RaiseStmt(span=self._span(node), value=value, cause=cause)
+
         if isinstance(node, ast.Return):
             value = self._lower_expr(node.value) if node.value is not None else None
+            if node.value is not None and value is None:
+                return None
             return ReturnStmt(span=self._span(node), value=value)
 
-        if isinstance(node, ast.Raise):
-            if node.exc is None:
-                self._unsupported(node, "bare re-raise is not supported")
+        if isinstance(node, ast.NamedExpr):
+            if not isinstance(node.target, ast.Name):
+                self._unsupported(node, "only simple name targets are supported for :=")
                 return None
-            if node.cause is not None:
-                self._unsupported(node, "raise ... from ... is not supported")
-                return None
-            value = self._lower_expr(node.exc)
+            value = self._lower_expr(node.value)
             if value is None:
                 return None
-            return RaiseStmt(span=self._span(node), value=value)
-
+            return NamedExpr(
+                span=self._span(node),
+                target=node.target.id,
+                value=value,
+            )
         if isinstance(node, ast.Try):
-            if node.orelse:
-                self._unsupported(node, "try/else is not supported yet")
-                return None
             if not node.handlers and not node.finalbody:
                 self._unsupported(node, "try without except or finally is not supported")
                 return None
@@ -363,8 +416,9 @@ class PythonSubsetLowerer:
                 lowered_body = self._lower_body(handler.body, allow_docstring=True) or []
                 handlers.append(ExceptHandler(span=self._span(handler), type_name=type_name, name=handler.name, body=lowered_body))
             body = self._lower_body(node.body, allow_docstring=True) or []
+            orelse = self._lower_body(node.orelse, allow_docstring=True) or []
             finalbody = self._lower_body(node.finalbody, allow_docstring=True) or []
-            return TryStmt(span=self._span(node), body=body, handlers=handlers, finalbody=finalbody)
+            return TryStmt(span=self._span(node), body=body, handlers=handlers, orelse=orelse, finalbody=finalbody)
 
         if isinstance(node, ast.Break):
             return BreakStmt(span=self._span(node))
@@ -453,41 +507,63 @@ class PythonSubsetLowerer:
             return expr
 
         if isinstance(node, ast.Compare):
-            if len(node.ops) != 1 or len(node.comparators) != 1:
-                self._unsupported(node, "comparison chaining is not supported")
-                return None
-            operator = self._compare_symbol(node.ops[0])
-            if operator is None:
+            left = self._lower_expr(node.left)
+            comparators = [self._lower_expr(comparator) for comparator in node.comparators]
+            operators = [self._compare_symbol(operator) for operator in node.ops]
+            if any(operator is None for operator in operators):
                 self._unsupported(node, "unsupported comparison operator")
                 return None
-            left = self._lower_expr(node.left)
-            right = self._lower_expr(node.comparators[0])
-            if left is None or right is None:
+            if left is None or any(comparator is None for comparator in comparators):
                 return None
-            return CompareExpr(span=self._span(node), op=operator, left=left, right=right)
+            if len(operators) == 1:
+                return CompareExpr(span=self._span(node), op=operators[0], left=left, right=comparators[0])
+            return CompareChainExpr(span=self._span(node), operands=[left, *comparators], ops=operators)
 
         if isinstance(node, ast.Call):
-            args = [self._lower_expr(arg) for arg in node.args]
+            args = []
+            for arg in node.args:
+                if isinstance(arg, ast.Starred):
+                    lowered = self._lower_expr(arg.value)
+                    if lowered is None:
+                        return None
+                    args.append(StarredExpr(span=self._span(arg), value=lowered))
+                    continue
+                lowered = self._lower_expr(arg)
+                if lowered is None:
+                    return None
+                args.append(lowered)
             if any(arg is None for arg in args):
                 return None
             kwargs = {}
+            kw_starred = []
             for keyword in node.keywords:
-                if keyword.arg is None:
-                    self._unsupported(node, "**kwargs unpacking in calls is not supported yet")
-                    return None
                 lowered_value = self._lower_expr(keyword.value)
                 if lowered_value is None:
                     return None
-                kwargs[keyword.arg] = lowered_value
+                if keyword.arg is None:
+                    kw_starred.append(KwStarredExpr(span=self._span(keyword), value=lowered_value))
+                else:
+                    kwargs[keyword.arg] = lowered_value
             if isinstance(node.func, ast.Name):
-                return CallExpr(span=self._span(node), func_name=node.func.id, args=args, kwargs=kwargs)
+                return CallExpr(span=self._span(node), func_name=node.func.id, args=args, kwargs=kwargs, kw_starred=kw_starred)
             if isinstance(node.func, ast.Attribute):
                 obj = self._lower_expr(node.func.value)
                 if obj is None:
                     return None
-                return MethodCallExpr(span=self._span(node), object=obj, method_name=node.func.attr, args=args, kwargs=kwargs)
-            self._unsupported(node, "only direct function calls and attribute method calls are supported")
-            return None
+                return MethodCallExpr(span=self._span(node), object=obj, method_name=node.func.attr, args=args, kwargs=kwargs, kw_starred=kw_starred)
+            callee = self._lower_expr(node.func)
+            if callee is None:
+                return None
+            return CallValueExpr(span=self._span(node), callee=callee, args=args, kwargs=kwargs, kw_starred=kw_starred)
+
+        if isinstance(node, ast.NamedExpr):
+            if not isinstance(node.target, ast.Name):
+                self._unsupported(node, "only simple name targets are supported for :=")
+                return None
+            value = self._lower_expr(node.value)
+            if value is None:
+                return None
+            return NamedExpr(span=self._span(node), target=node.target.id, value=value)
 
         if isinstance(node, ast.List):
             elements = [self._lower_expr(element) for element in node.elts]
@@ -667,6 +743,15 @@ class PythonSubsetLowerer:
         self._unsupported(node, "only name and subscript delete targets are supported")
         return None
 
+    def _apply_decorators(self, target_name: str, decorators: list[ast.expr], span: SourceSpan) -> list[AssignStmt] | None:
+        current: NameExpr | CallValueExpr | CallExpr | MethodCallExpr | AttributeExpr = NameExpr(span=span, name=target_name)
+        for decorator in reversed(decorators):
+            lowered_decorator = self._lower_expr(decorator)
+            if lowered_decorator is None:
+                return None
+            current = CallValueExpr(span=self._span(decorator), callee=lowered_decorator, args=[current])
+        return [AssignStmt(span=span, name=target_name, value=current)]
+
     @staticmethod
     def _is_print_call(node: ast.expr) -> bool:
         return (
@@ -711,6 +796,13 @@ class PythonSubsetLowerer:
             ast.Mult: "*",
             ast.Div: "/",
             ast.Mod: "%",
+            ast.FloorDiv: "//",
+            ast.Pow: "**",
+            ast.BitAnd: "&",
+            ast.BitOr: "|",
+            ast.BitXor: "^",
+            ast.LShift: "<<",
+            ast.RShift: ">>",
         }
         return mapping.get(type(operator))
 
@@ -718,7 +810,9 @@ class PythonSubsetLowerer:
     def _unary_symbol(operator: ast.AST) -> str | None:
         mapping = {
             ast.USub: "-",
+            ast.UAdd: "+",
             ast.Not: "not",
+            ast.Invert: "~",
         }
         return mapping.get(type(operator))
 

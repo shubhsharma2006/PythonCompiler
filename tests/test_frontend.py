@@ -28,10 +28,10 @@ class FrontendTests(unittest.TestCase):
         self.assertGreater(len(lexed.tokens), 0)
 
     def test_lowers_import_statements(self):
-        _, _, program, errors = self.frontend("import math\nimport os.path\nfrom util import add\n")
+        _, _, program, errors = self.frontend("import math\nimport os.path\nfrom util import add\nfrom util import *\n")
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())
-        self.assertEqual(len(program.body), 3)
+        self.assertEqual(len(program.body), 4)
 
     def test_lowers_multi_argument_print_and_keywords(self):
         _, _, program, errors = self.frontend('print("hello", "world", sep=", ", end="!")\n')
@@ -61,7 +61,7 @@ class FrontendTests(unittest.TestCase):
         self.assertFalse(errors.has_errors(), errors.render())
 
     def test_lowers_membership_and_identity_compare(self):
-        _, _, program, errors = self.frontend("items = [1, 2]\nprint(1 in items)\nprint(items is items)\n")
+        _, _, program, errors = self.frontend("items = [1, 2]\nprint(1 in items)\nprint(items is items)\nprint(1 < 2 < 3)\n")
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())
 
@@ -149,6 +149,11 @@ class FrontendTests(unittest.TestCase):
             "a, b = items[:2]\n"
             "pass\n"
             "del items[0]\n"
+            "class Box:\n"
+            "    pass\n"
+            "box = Box()\n"
+            "box.value = 1\n"
+            "del box.value\n"
             "x = 1\n"
             "def update():\n"
             "    global x\n"
@@ -171,8 +176,9 @@ class FrontendTests(unittest.TestCase):
             "        return 1\n"
             "    def __exit__(self, exc_type, exc, tb):\n"
             "        pass\n"
-            "with CM() as value:\n"
+            "with CM() as value, CM() as other:\n"
             "    print(value)\n"
+            "    print(other)\n"
         )
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())

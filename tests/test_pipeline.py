@@ -32,9 +32,10 @@ class PipelineTests(unittest.TestCase):
         result = execute_source(source, filename="inline.py")
         return result, result.run_output, result.errors.render()
 
-    def execute_program_file(self, source: str, extra_files: dict[str, str]):
+    def execute_program_file(self, source: str, extra_files: dict[str, str], *, main_relative_path: str = "main.py"):
         with tempfile.TemporaryDirectory() as temp_dir:
-            main_path = os.path.join(temp_dir, "main.py")
+            main_path = os.path.join(temp_dir, main_relative_path)
+            os.makedirs(os.path.dirname(main_path), exist_ok=True)
             with open(main_path, "w", encoding="utf-8") as handle:
                 handle.write(source)
             for relative_path, contents in extra_files.items():
@@ -154,9 +155,12 @@ class PipelineTests(unittest.TestCase):
             "print(4 not in items)\n"
             "print(items is items)\n"
             "print(items is not [1, 2, 3])\n"
+            "print(1 < 2 < 3)\n"
+            "print(1 < 3 > 2)\n"
+            "print(1 < 2 > 4)\n"
         )
         self.assertTrue(result.success, rendered)
-        self.assertEqual(run_output.strip().splitlines(), ["True", "True", "True", "True"])
+        self.assertEqual(run_output.strip().splitlines(), ["True", "True", "True", "True", "True", "True", "False"])
 
     def test_execute_source_supports_additional_builtins(self):
         result, run_output, rendered = self.execute_program(
@@ -190,6 +194,33 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["7", "loaded"])
+
+    def test_execute_source_supports_relative_imports(self):
+        result, run_output, rendered = self.execute_program_file(
+            "from . import helper\n"
+            "from .helper import value\n"
+            "print(helper.value)\n"
+            "print(value)\n",
+            {
+                "pkg/__init__.py": "",
+                "pkg/helper.py": "value = 11\n",
+            },
+            main_relative_path="pkg/main.py",
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["11", "11"])
+
+    def test_execute_source_supports_star_imports(self):
+        result, run_output, rendered = self.execute_program_file(
+            "from helper import *\n"
+            "print(value)\n"
+            "print(add(2, 5))\n",
+            {
+                "helper.py": "__all__ = ['value', 'add']\nvalue = 7\ndef add(a, b):\n    return a + b\n_hidden = 9\n",
+            },
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["7", "7"])
 
     def test_execute_source_supports_importlib_fallback_for_stdlib(self):
         result, run_output, rendered = self.execute_program(
@@ -324,6 +355,10 @@ class PipelineTests(unittest.TestCase):
             "del items[0]\n"
             'd = {"x": 1, "y": 2}\n'
             'del d["x"]\n'
+            "box = Box()\n"
+            "box.value = 4\n"
+            "del box.value\n"
+            "box.value = 9\n"
             "name = 5\n"
             "del name\n"
             "x = 1\n"
@@ -340,11 +375,12 @@ class PipelineTests(unittest.TestCase):
             "update()\n"
             "print(items[0])\n"
             "print(len(d))\n"
+            "print(box.value)\n"
             "print(x)\n"
             "print(outer())\n"
         )
         self.assertTrue(result.success, rendered)
-        self.assertEqual(run_output.strip().splitlines(), ["2", "1", "2", "15"])
+        self.assertEqual(run_output.strip().splitlines(), ["2", "1", "9", "2", "15"])
 
     def test_execute_source_supports_with_statement(self):
         result, run_output, rendered = self.execute_program(
@@ -354,11 +390,12 @@ class PipelineTests(unittest.TestCase):
             "        return \"body\"\n"
             "    def __exit__(self, exc_type, exc, tb):\n"
             "        print(\"exit\")\n"
-            "with CM() as value:\n"
+            "with CM() as value, CM() as other:\n"
             "    print(value)\n"
+            "    print(other)\n"
         )
         self.assertTrue(result.success, rendered)
-        self.assertEqual(run_output.strip().splitlines(), ["enter", "body", "exit"])
+        self.assertEqual(run_output.strip().splitlines(), ["enter", "enter", "body", "body", "exit", "exit"])
 
     def test_execute_source_with_statement_can_suppress_exception(self):
         result, run_output, rendered = self.execute_program(
@@ -452,6 +489,56 @@ class PipelineTests(unittest.TestCase):
             run_output.strip().splitlines(),
             ["child", "child", "base:child:7", "True", "True"],
         )
+
+    def test_execute_source_supports_function_and_class_decorators(self):
+        result, run_output, rendered = self.execute_program(
+            "def decorate(fn):\n"
+            "    def wrapped(name):\n"
+            "        return fn(name) + \"!\"\n"
+            "    return wrapped\n\n"
+            "def mark(cls):\n"
+            "    cls.tag = \"ok\"\n"
+            "    return cls\n\n"
+            "@decorate\n"
+            "def greet(name):\n"
+            "    return \"hi \" + name\n\n"
+            "@mark\n"
+            "class Box:\n"
+            "    pass\n\n"
+            "print(greet(\"Ada\"))\n"
+            "print(Box.tag)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["hi Ada!", "ok"])
+
+    def test_execute_source_supports_try_else_and_reraise(self):
+        result, run_output, rendered = self.execute_program(
+            "try:\n"
+            "    print(\"body\")\n"
+            "except Exception:\n"
+            "    print(\"except\")\n"
+            "else:\n"
+            "    print(\"else\")\n\n"
+            "try:\n"
+            "    try:\n"
+            "        raise ValueError(\"boom\")\n"
+            "    except ValueError:\n"
+            "        raise\n"
+            "except Exception as err:\n"
+            "    print(err)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["body", "else", "boom"])
+
+    def test_execute_source_supports_raise_from(self):
+        result, _, rendered = self.execute_program(
+            "try:\n"
+            "    raise ValueError(\"inner\")\n"
+            "except ValueError as err:\n"
+            "    raise RuntimeError(\"outer\") from err\n"
+        )
+        self.assertFalse(result.success)
+        self.assertIn("unhandled exception: outer (caused by inner)", rendered)
 
     def test_execute_source_reports_unhandled_exception(self):
         result, _, rendered = self.execute_program('raise "boom"\n')
@@ -549,6 +636,17 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("native compilation does not support lists, tuples, indexing, or len() yet", result.errors.render())
 
+    def test_compile_source_rejects_comparison_chaining_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "print(1 < 2 < 3)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support comparison chaining yet", result.errors.render())
+
     def test_compile_source_rejects_with_statement_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = os.path.join(temp_dir, "program.c")
@@ -605,17 +703,6 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("no binding for nonlocal 'missing' found", rendered)
 
-    def test_unsupported_delete_target_is_rejected(self):
-        result, _, rendered = self.execute_program(
-            "class Box:\n"
-            "    pass\n"
-            "box = Box()\n"
-            "box.value = 1\n"
-            "del box.value\n"
-        )
-        self.assertFalse(result.success)
-        self.assertIn("only name and subscript delete targets are supported", rendered)
-
     def test_forward_reference_compiles(self):
         source = (
             "print(later(5))\n\n"
@@ -648,6 +735,11 @@ class PipelineTests(unittest.TestCase):
         result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
         self.assertFalse(result.success)
         self.assertIn("missing required argument 'b'", rendered)
+
+    def test_bare_raise_outside_except_fails(self):
+        result, _, rendered = self.execute_program("raise\n")
+        self.assertFalse(result.success)
+        self.assertIn("bare raise is only valid inside an except block", rendered)
 
     def test_duplicate_keyword_argument_fails(self):
         source = (

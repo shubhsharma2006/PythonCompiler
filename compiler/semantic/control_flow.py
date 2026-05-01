@@ -41,6 +41,7 @@ class ControlFlowChecker:
                 self._check_statements(statement.body, table)
                 for handler in statement.handlers:
                     self._check_statements(handler.body, table)
+                self._check_statements(statement.orelse, table)
                 self._check_statements(statement.finalbody, table)
             elif isinstance(statement, WithStmt):
                 self._check_statements(statement.body, table)
@@ -61,7 +62,8 @@ class ControlFlowChecker:
                     return True
                 body_returns = self._must_return(statement.body)
                 handlers_return = all(self._must_return(handler.body) for handler in statement.handlers)
-                if body_returns and (not statement.handlers or handlers_return):
+                else_returns = self._must_return(statement.orelse) if statement.orelse else body_returns
+                if else_returns and (not statement.handlers or handlers_return):
                     return True
             if isinstance(statement, WhileStmt):
                 continue
