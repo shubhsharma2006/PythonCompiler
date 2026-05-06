@@ -686,10 +686,14 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("unpack expected 2 values, got 3", rendered)
 
-    def test_starred_unpacking_is_rejected(self):
-        result, _, rendered = self.execute_program("a, *rest = [1, 2, 3]\n")
-        self.assertFalse(result.success)
-        self.assertIn("starred assignment is not supported yet", rendered)
+    def test_starred_unpacking_is_supported(self):
+        result, run_output, rendered = self.execute_program(
+            "a, *rest = [1, 2, 3]\n"
+            "print(a)\n"
+            "print(rest)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["1", "[2, 3]"])
 
     def test_nonlocal_without_enclosing_binding_is_rejected(self):
         result, _, rendered = self.execute_program(

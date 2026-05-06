@@ -589,6 +589,13 @@ def _program_uses_compare_chains(program: Program) -> bool:
             elif isinstance(statement, WithStmt):
                 if _expr_uses_compare_chains(statement.context_expr) or walk(statement.body):
                     return True
+            elif isinstance(statement, PrintStmt):
+                if any(_expr_uses_compare_chains(value) for value in statement.values):
+                    return True
+                if statement.sep is not None and _expr_uses_compare_chains(statement.sep):
+                    return True
+                if statement.end is not None and _expr_uses_compare_chains(statement.end):
+                    return True
             else:
                 value = getattr(statement, "value", None)
                 expr = getattr(statement, "expr", None)

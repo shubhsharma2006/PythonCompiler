@@ -751,6 +751,21 @@ class BytecodeInterpreter:
             if not frame.with_stack:
                 raise VMError("with exit without enter")
             exit_method = frame.with_stack.pop()
+            if frame.pending_unwind is not None and frame.pending_unwind[0] == "raise":
+                signal = frame.pending_unwind[1]
+                exc_value = signal.value if isinstance(signal, RaisedSignal) else signal
+                exc_type = type(exc_value)
+                handled = py_invoke_callable(
+                    exit_method,
+                    [exc_type, exc_value, None],
+                    frame.module,
+                    execute_function=self._execute_function,
+                )
+                if handled:
+                    frame.pending_unwind = None
+                    if frame.active_exceptions:
+                        frame.active_exceptions.pop()
+                return
             py_invoke_callable(
                 exit_method,
                 [None, None, None],
@@ -765,6 +780,11 @@ class BytecodeInterpreter:
             if frame.active_exceptions:
                 raise frame.active_exceptions[-1]
             raise RaisedSignal(None)
+
+        if op == "RAISE_CAUSE":
+            cause = frame.stack.pop()
+            value = frame.stack.pop()
+            raise RaisedSignal(value, cause=cause)
 
         if op == "RETURN_VALUE":
             raise ReturnSignal(
@@ -1013,6 +1033,17 @@ class BytecodeInterpreter:
             return {}
 
         return dict(self._current_frame.locals)
+
+    def invoke_builtin_callable(self, callable_obj: object, *args, **kwargs) -> object:
+        if self._current_frame is None:
+            raise VMError("no active frame for builtin callback")
+        return py_invoke_callable(
+            callable_obj,
+            list(args),
+            self._current_frame.module,
+            kwargs=dict(kwargs),
+            execute_function=self._execute_function,
+        )
 
     def _resolve_import_name(
         self,

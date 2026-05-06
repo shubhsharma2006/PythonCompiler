@@ -39,6 +39,9 @@ class _Host:
     def build_super(self, *args) -> object:
         return args
 
+    def invoke_builtin_callable(self, callable_obj: object, *args, **kwargs) -> object:
+        return callable_obj(*args, **kwargs)
+
 
 class VMRuntimeTests(unittest.TestCase):
     def test_unwrap_runtime_value_returns_underlying_python_value(self):
@@ -85,6 +88,20 @@ class VMRuntimeTests(unittest.TestCase):
         self.assertEqual(host.output, ["hello, world!"])
         self.assertEqual(builtins["globals"](), {"g": 1})
         self.assertEqual(builtins["locals"](), {"l": 2})
+
+    def test_builtin_sorted_accepts_host_adapted_key(self):
+        class _CallbackHost(_Host):
+            def invoke_builtin_callable(self, callable_obj: object, *args, **kwargs) -> object:
+                if callable_obj == "negate":
+                    return -args[0]
+                return super().invoke_builtin_callable(callable_obj, *args, **kwargs)
+
+        host = _CallbackHost()
+        builtins = build_builtins(host)
+        result = builtins["sorted"]([3, 1, 2], key=lambda value: -value)
+        self.assertEqual(result, [3, 2, 1])
+        result = builtins["sorted"]([3, 1, 2], key="negate")
+        self.assertEqual(result, [3, 2, 1])
 
     def test_builtin_len_and_range_validate_arguments(self):
         self.assertEqual(builtin_len(PyListObject([1, 2])), 2)

@@ -544,7 +544,11 @@ class BytecodeLowerer:
         if isinstance(statement, RaiseStmt):
             if statement.value is not None:
                 self._emit_expr(statement.value, instructions, parent_key)
-            instructions.append(Instruction("RAISE"))
+            if statement.cause is not None:
+                self._emit_expr(statement.cause, instructions, parent_key)
+                instructions.append(Instruction("RAISE_CAUSE"))
+            else:
+                instructions.append(Instruction("RAISE"))
             return
 
         if isinstance(statement, TryStmt):
@@ -616,12 +620,21 @@ class BytecodeLowerer:
 
         if isinstance(statement, WithStmt):
             self._emit_expr(statement.context_expr, instructions, parent_key)
+            finally_label = self._new_label("with_finally")
+            instructions.append(Instruction("WITH_ENTER", statement.optional_var))
             instructions.append(
-                Instruction("WITH_ENTER", statement.optional_var)
+                Instruction(
+                    "TRY_FINALLY",
+                    finally_label,
+                )
             )
             for child in statement.body:
                 self._emit_statement(child, instructions, parent_key)
+            instructions.append(Instruction("POP_TRY"))
+            instructions.append(Instruction("JUMP", finally_label))
+            instructions.append(Instruction("LABEL", finally_label))
             instructions.append(Instruction("WITH_EXIT"))
+            instructions.append(Instruction("END_FINALLY"))
             return
 
     def _emit_expr(
@@ -804,6 +817,40 @@ class BytecodeLowerer:
             instructions.append(Instruction("LABEL", end_label))
             return
 
+        if isinstance(expr, LambdaExpr):
+            lowered = self._lower_function(
+                expr.func_def,
+                parent_key=parent_key or "<lambda>",
+            )
+
+            for default in expr.func_def.defaults:
+                self._emit_expr(default, instructions, parent_key, name_bindings)
+
+            kwonly_default_names = [
+                name
+                for name in expr.func_def.kwonly_params
+                if name in expr.func_def.kwonly_defaults
+            ]
+            for name in kwonly_default_names:
+                self._emit_expr(
+                    expr.func_def.kwonly_defaults[name],
+                    instructions,
+                    parent_key,
+                    name_bindings,
+                )
+
+            instructions.append(
+                Instruction(
+                    "MAKE_FUNCTION",
+                    (
+                        lowered.key,
+                        len(expr.func_def.defaults),
+                        kwonly_default_names,
+                    ),
+                )
+            )
+            return
+
         if isinstance(expr, CallExpr):
 
             star_flags = [isinstance(arg, StarredExpr) for arg in expr.args]
@@ -973,9 +1020,17 @@ class BytecodeLowerer:
                     name_bindings,
                 )
 
+            if kwarg_names:
+                instructions.append(
+                    Instruction(
+                        "BUILD_KWARGS",
+                        (kwarg_names, 0),
+                    )
+                )
+
             opcode_arg = (
                 len(expr.args),
-                kwarg_names,
+                True,
             ) if kwarg_names else len(expr.args)
 
             instructions.append(

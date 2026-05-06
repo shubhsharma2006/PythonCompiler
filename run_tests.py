@@ -400,8 +400,8 @@ NEGATIVE_TESTS = [
     },
     {
         "name": "Reject unsupported delete target",
-        "source": "class Box:\n    pass\nbox = Box()\nbox.value = 1\ndel box.value\n",
-        "expected_substring": "only name and subscript delete targets are supported",
+        "source": "x = 1\ny = 2\ndel (x, y)\n",
+        "expected_substring": "only name, attribute, and subscript delete targets are supported",
     },
     {
         "name": "Reject invalid with-as target",

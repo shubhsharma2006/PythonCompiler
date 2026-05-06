@@ -220,6 +220,9 @@ class TypeChecker:
             return
 
         if isinstance(statement, FromImportStmt):
+            if statement.name == "*":
+                scope.declare_wildcard_import()
+                return
             self._define_name(scope, statement.alias or statement.name, ValueType.UNKNOWN)
             if self.current_function is not None:
                 self.current_function.local_types[statement.alias or statement.name] = ValueType.UNKNOWN

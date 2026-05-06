@@ -731,6 +731,15 @@ class PythonSubsetLowerer:
     def _lower_delete_target(self, node: ast.expr):
         if isinstance(node, ast.Name):
             return NameExpr(span=self._span(node), name=node.id)
+        if isinstance(node, ast.Attribute):
+            obj = self._lower_expr(node.value)
+            if obj is None:
+                return None
+            return AttributeExpr(
+                span=self._span(node),
+                object=obj,
+                attr_name=node.attr,
+            )
         if isinstance(node, ast.Subscript):
             collection = self._lower_expr(node.value)
             if isinstance(node.slice, ast.Slice):
@@ -740,7 +749,7 @@ class PythonSubsetLowerer:
             if collection is None or index is None:
                 return None
             return IndexExpr(span=self._span(node), collection=collection, index=index)
-        self._unsupported(node, "only name and subscript delete targets are supported")
+        self._unsupported(node, "only name, attribute, and subscript delete targets are supported")
         return None
 
     def _apply_decorators(self, target_name: str, decorators: list[ast.expr], span: SourceSpan) -> list[AssignStmt] | None:

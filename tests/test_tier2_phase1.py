@@ -117,7 +117,6 @@ class Tier2Phase1Tests(unittest.TestCase):
         )
         self.assertEqual(lines, ["8"])
 
-    @unittest.expectedFailure  # VM Closure objects can't bridge to Python builtins like sorted(key=...) yet
     def test_lambda_with_sorted(self):
         lines = self.run_vm(
             "items = [3, 1, 4, 1, 5]\n"

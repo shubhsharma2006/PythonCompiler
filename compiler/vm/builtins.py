@@ -18,6 +18,8 @@ class BuiltinHost(Protocol):
 
     def build_super(self, *args) -> object: ...
 
+    def invoke_builtin_callable(self, callable_obj: object, *args, **kwargs) -> object: ...
+
 
 def builtin_isinstance(obj: object, classinfo: object) -> bool:
     obj = unwrap_runtime_value(obj)
@@ -79,6 +81,27 @@ def builtin_print(host: BuiltinHost, *args, sep=" ", end="\n", file=None, flush=
     return None
 
 
+def _adapt_host_callable(host: BuiltinHost, callback: object | None):
+    callback = unwrap_runtime_value(callback)
+    if callback is None or callable(callback):
+        return callback
+
+    def wrapper(*args, **kwargs):
+        return host.invoke_builtin_callable(callback, *args, **kwargs)
+
+    return wrapper
+
+
+def builtin_sorted(host: BuiltinHost, iterable, *, key=None, reverse=False):
+    iterable = unwrap_runtime_value(iterable)
+    key = _adapt_host_callable(host, key)
+    reverse = bool(unwrap_runtime_value(reverse))
+    try:
+        return sorted(iterable, key=key, reverse=reverse)
+    except TypeError as exc:
+        raise VMError(str(exc)) from None
+
+
 def build_builtins(host: BuiltinHost) -> dict[str, object]:
     return {
         "print": lambda *args, sep=" ", end="\n", file=None, flush=False: builtin_print(
@@ -112,7 +135,9 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
         "map": map,
         "filter": filter,
         "reversed": reversed,
-        "sorted": sorted,
+        "sorted": lambda iterable, *, key=None, reverse=False: builtin_sorted(
+            host, iterable, key=key, reverse=reverse
+        ),
         "iter": iter,
         "next": next,
         "abs": abs,
