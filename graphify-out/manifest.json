@@ -1,0 +1,430 @@
+{
+  "/Users/shubhsharma/Desktop/compiler project/test_optimizer.py": {
+    "mtime": 1775625148.0136497,
+    "hash": "ab5e8d1fe93516a2a4c31576bbf9d15f"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_def.py": {
+    "mtime": 1777526141.7751815,
+    "hash": "753c5bcba772f546eea292bc326efd3b"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_booleans.py": {
+    "mtime": 1775625148.016796,
+    "hash": "64f2bcd60c490f1b3f04d9d7400c6d46"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tmpqiyn4rbh.py": {
+    "mtime": 1778085598.0519536,
+    "hash": "f861b1233f0aedd6bf233be8a0573601"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_input.py": {
+    "mtime": 1777714231.832416,
+    "hash": "67a372eaa507b7facf809c089a0e933b"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/semantic.py": {
+    "mtime": 1775625740.0531495,
+    "hash": "06487e386798cf8a470ba83999cfc0a3"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_with.py": {
+    "mtime": 1777524660.3701286,
+    "hash": "1331fe5734a3557c76861908a8f98996"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_ag.py": {
+    "mtime": 1777526100.640218,
+    "hash": "a82df35b4ea2eb144a53d37ffd33aff8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_phase1_ops.py": {
+    "mtime": 1777714347.7590282,
+    "hash": "146f9d0a8f7cefcfd18493f67dfcadb8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/run_tests.py": {
+    "mtime": 1778132110.1328304,
+    "hash": "c1f34586365a8d10d304b000743bd0d1"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/py_runtime.c": {
+    "mtime": 1778132217.0764248,
+    "hash": "980bd2204e44e174543c3ea8a5a7a82a"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_advanced.py": {
+    "mtime": 1775625148.016458,
+    "hash": "90ee57ad66112cbf1f4fc3f971c3fcc4"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_del.py": {
+    "mtime": 1777525450.2171328,
+    "hash": "cd1cb2561ec9208d41cf8df3f2effd59"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/parsetab.py": {
+    "mtime": 1775582269.2260547,
+    "hash": "eafd40e6e14eaceadb7a9aef4557de87"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_mixed_numeric_ops.py": {
+    "mtime": 1777641085.4356396,
+    "hash": "70dd6bbf8c11636357cd3e7801c755e1"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_kw.py": {
+    "mtime": 1777526171.4675329,
+    "hash": "cb1879920cd988ba92481979bb9474be"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_loop_control.py": {
+    "mtime": 1775771284.283352,
+    "hash": "5e0f939d78f1a3d0964c30beebbd1115"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tmpkynt1fm8.py": {
+    "mtime": 1778085647.9716938,
+    "hash": "f861b1233f0aedd6bf233be8a0573601"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/ir.py": {
+    "mtime": 1775625740.054564,
+    "hash": "67c1c2dfe44b066ab91979af2cdf103c"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/parser.py": {
+    "mtime": 1775626379.794238,
+    "hash": "07be0c23b033c10e0986b378d64ed4cc"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tmpcinowmdp.py": {
+    "mtime": 1778085670.695569,
+    "hash": "f861b1233f0aedd6bf233be8a0573601"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/py_runtime.h": {
+    "mtime": 1778132291.037557,
+    "hash": "a3e27ffa14f7ed42e9cb3925364c7a31"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tmpi8lyg2fn.py": {
+    "mtime": 1778085398.4012296,
+    "hash": "f861b1233f0aedd6bf233be8a0573601"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_functions.py": {
+    "mtime": 1775625148.0129404,
+    "hash": "9e13402503c02874d694163596665d66"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/lexer.py": {
+    "mtime": 1775625740.055646,
+    "hash": "7165217cc801d12b51b1a1249b94a93a"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_control_flow.py": {
+    "mtime": 1775625148.0133853,
+    "hash": "83c3b0e5a495894d315ddcc565a0537c"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tmpm00ywfpf.py": {
+    "mtime": 1778085423.2787702,
+    "hash": "f861b1233f0aedd6bf233be8a0573601"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/optimizer.py": {
+    "mtime": 1775625740.0539927,
+    "hash": "d00dd65eb851d12edfe8fb2a03a69252"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/ast_viz.py": {
+    "mtime": 1775486668.4424422,
+    "hash": "8785ba2e806a8857bcaa0085ff1f7cd8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tmpwrl1xw48.py": {
+    "mtime": 1778085585.7770746,
+    "hash": "f861b1233f0aedd6bf233be8a0573601"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/main.py": {
+    "mtime": 1775625148.0120692,
+    "hash": "859251b443b0e6d89254d4d32623c7dd"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/codegen.py": {
+    "mtime": 1775625740.055037,
+    "hash": "202d575740312cd7e26c931113a8f562"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/out_program.c": {
+    "mtime": 1777639103.8335643,
+    "hash": "e8a7ea5f3eaaeb6ccf99daf371f6d3cd"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/output.c": {
+    "mtime": 1776783250.5036285,
+    "hash": "d4f81cad9bd551f8a5a23bfd7bfaacd4"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/test_native_semantics.py": {
+    "mtime": 1777641085.4355018,
+    "hash": "455e08f1144ef2c378ea63d2c67f973f"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/ast_nodes.py": {
+    "mtime": 1775625740.0519764,
+    "hash": "1956ae31554024d55a25251f8c84a2fc"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_frontend.py": {
+    "mtime": 1777403157.247286,
+    "hash": "5ee1cd84134c1e2236a1678bd9856cde"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_ssa.py": {
+    "mtime": 1775664267.0634089,
+    "hash": "0cd26371a0fd4d54cd897b4d606931e4"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_ir.py": {
+    "mtime": 1775661403.9450352,
+    "hash": "c02f8877cfbedf0d54355f71653a59dd"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/__init__.py": {
+    "mtime": 1775625740.0506694,
+    "hash": "c1e3143589da7c46c369d0f10c42a87f"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_vm_runtime.py": {
+    "mtime": 1778050683.0051858,
+    "hash": "e6242688449791b9b96476b75646e4a1"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_parser_equivalence.py": {
+    "mtime": 1778086682.9363189,
+    "hash": "b4e50f64d33f7142b92e272385ad7737"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_cli.py": {
+    "mtime": 1775667371.7022061,
+    "hash": "ee47e2d6fae6ad2aeb6092a596c3ccb0"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_tier2_phase1.py": {
+    "mtime": 1778050692.34092,
+    "hash": "620dac227729a0d8d968b04a20c35148"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_pipeline.py": {
+    "mtime": 1778050035.1215234,
+    "hash": "ab70bcfef50f47e36e47ce7cdf4b05b9"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/config.py": {
+    "mtime": 1775496939.9506555,
+    "hash": "e2739dca203b391cd94d033f21a49015"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/__init__.py": {
+    "mtime": 1775666969.983588,
+    "hash": "d166b8ad34e6112e5e9fc2609cec88ff"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/pipeline.py": {
+    "mtime": 1778085341.2723634,
+    "hash": "f0e8fb72a6e2b21225a2c3e35b5ad6c0"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/__main__.py": {
+    "mtime": 1775625740.0472732,
+    "hash": "859251b443b0e6d89254d4d32623c7dd"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/core/__init__.py": {
+    "mtime": 1777550864.4253662,
+    "hash": "59630ce3be34d1807f2e1b75567ddf92"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/core/types.py": {
+    "mtime": 1777550864.4253528,
+    "hash": "32b07aa52757cef930fcd4e5b71e4dad"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/core/visitor.py": {
+    "mtime": 1775496975.4489322,
+    "hash": "2140b133a779c8f0ad6948500aed15a6"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/core/ast.py": {
+    "mtime": 1777659995.1862836,
+    "hash": "05ce0019562d755794d8dd83e691fdaf"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/core/signature.py": {
+    "mtime": 1777143917.9442077,
+    "hash": "aa5c1df21b635b135673b93b46c016d5"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser_legacy.py": {
+    "mtime": 1775626345.3169057,
+    "hash": "040e229555c8c5a87d8cb6513b1c2014"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/token_types.py": {
+    "mtime": 1778062950.17506,
+    "hash": "fbddd324e4ac4a467677ace6d5f20c36"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/source_map.py": {
+    "mtime": 1778062961.6171508,
+    "hash": "b362bb29661ba5d8247c7cf38c820abc"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/__init__.py": {
+    "mtime": 1778084500.811334,
+    "hash": "3f7a5a6992ccb48326b50da141c916be"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/cst.py": {
+    "mtime": 1775626345.3160732,
+    "hash": "91ce464a0aa20f705e5ec190301aeb01"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/lexer.py": {
+    "mtime": 1778063100.6726608,
+    "hash": "383a7c714477cfa50f95863771421775"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/ast_lowering.py": {
+    "mtime": 1778049988.1819847,
+    "hash": "8a55a2804e086cfb03d85622442fdf90"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/source.py": {
+    "mtime": 1775626345.3158555,
+    "hash": "6badeac11141b8b5d7061db12019a8dc"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/owned_lexer.py": {
+    "mtime": 1778063032.5718858,
+    "hash": "067daf1cdc0ea5bf52e67a464b98197d"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser/recovery.py": {
+    "mtime": 1778065562.3753953,
+    "hash": "73be829e2425bdbbbfb91ea742df4e19"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser/__init__.py": {
+    "mtime": 1778084486.071608,
+    "hash": "2d93f360f891f849541b711a529a658a"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser/token_cursor.py": {
+    "mtime": 1778065528.037979,
+    "hash": "373f93b800fefdccbe7b93174d7b0e02"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser/expr_parser.py": {
+    "mtime": 1778065757.1762445,
+    "hash": "355f47f360b4ee05b52949ed6fa8b4a3"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser/stmt_parser.py": {
+    "mtime": 1778085784.0289931,
+    "hash": "7ea51fbd03ad52b0fb102941f2c7dfad"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/frontend/parser/precedence.py": {
+    "mtime": 1778065547.9695268,
+    "hash": "b541051d4365c5a090413f84f067b313"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/optimizer/__init__.py": {
+    "mtime": 1775625016.1698103,
+    "hash": "c4de06413f34cbd3893962d30bf66d70"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/optimizer/folding.py": {
+    "mtime": 1777550864.371929,
+    "hash": "c3e0a5c8fa7b7f11fee4cd6aa6fa0d66"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/cfg.py": {
+    "mtime": 1775905922.4395301,
+    "hash": "30ffa6f77a236b1945dfe9c7bc8c0d58"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/analysis.py": {
+    "mtime": 1775661373.2051716,
+    "hash": "0aea55afff37d058d501a30216631016"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/lowering.py": {
+    "mtime": 1775916706.398048,
+    "hash": "c28c7923d6e13261c581c2868b8afd44"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/__init__.py": {
+    "mtime": 1775664249.7059042,
+    "hash": "51ecea1e7fcb668b764f8e1bf1d7f994"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/ssa.py": {
+    "mtime": 1775664243.8186913,
+    "hash": "5052c9b150b92dea7441b0ad831294f9"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/model.py": {
+    "mtime": 1775661093.3644118,
+    "hash": "ac652e95835d7409d2b155b7ad098eca"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/generator.py": {
+    "mtime": 1775661093.364847,
+    "hash": "4bd41d2e92892f27feed2eb3d7ff2ec4"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/ir/passes.py": {
+    "mtime": 1777550864.387474,
+    "hash": "87ebc5afbcd0ea9d55d71b19d4d5c3e8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/runtime/c_runtime.py": {
+    "mtime": 1778132298.4129186,
+    "hash": "eafbb663dcf3e48386e754f2f1f0fdcc"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/runtime/__init__.py": {
+    "mtime": 1775665083.9516327,
+    "hash": "222e25a7e18f6951c5a4cea2cc710bfc"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/utils/__init__.py": {
+    "mtime": 1775496920.5957956,
+    "hash": "08453c96fc46ddf5c84385e69f8d2261"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/utils/logger.py": {
+    "mtime": 1775496966.641753,
+    "hash": "1502b491eca4375c41f6d68aa4bd1baf"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/utils/error_handler.py": {
+    "mtime": 1775625016.1510558,
+    "hash": "d63f12f6df6b7618aa761126b02f80ea"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/backend/__init__.py": {
+    "mtime": 1775625016.170825,
+    "hash": "1d8691d9144de77dbfc731672aefc368"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/backend/c_codegen.py": {
+    "mtime": 1778132497.269061,
+    "hash": "86bf4dbcb031f37108a8e7da8d108e62"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/cli/__init__.py": {
+    "mtime": 1775625016.1712203,
+    "hash": "16a626bf9ab3265723ec633c10e9e7a2"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/cli/app.py": {
+    "mtime": 1778085364.9814813,
+    "hash": "dbf4aea60050e218c74e190c2abaee8c"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/builtins.py": {
+    "mtime": 1778087101.3596234,
+    "hash": "c8d47fef07c63c454e6eaf3d31c2300c"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/lowering.py": {
+    "mtime": 1778050004.9194574,
+    "hash": "86da800f977ddb25ab0243618e3469f0"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/__init__.py": {
+    "mtime": 1775769168.7057297,
+    "hash": "435021724ee0975cab5a134375330d72"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/interpreter.py": {
+    "mtime": 1778132099.2721546,
+    "hash": "719721bdfebdf1976eec4ec1990bce3c"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/errors.py": {
+    "mtime": 1777550864.3716722,
+    "hash": "5f133f75e2e25e2d54d6beff002010e8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/bytecode.py": {
+    "mtime": 1777550864.408369,
+    "hash": "23d42fc4d7f07c97d2fce856092bc14f"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/vm/objects.py": {
+    "mtime": 1777620199.2828665,
+    "hash": "1033774319d51271e93ae5ee7d58f938"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/type_checker.py": {
+    "mtime": 1778050074.2830122,
+    "hash": "17ec06f5efb3483937e224a1287b0d6a"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/analyzer.py": {
+    "mtime": 1775661093.363596,
+    "hash": "e9852f9663522c8e312af105c32f156d"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/control_flow.py": {
+    "mtime": 1777402031.5594165,
+    "hash": "4f6205f0e18ce046126ce005c01639b8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/__init__.py": {
+    "mtime": 1775661093.363865,
+    "hash": "2a81726ac19552f91a6db1a93d551d37"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/model.py": {
+    "mtime": 1777402939.9228854,
+    "hash": "3e2fbdddaf6dc0929b61e4dbae29e3f8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/symbols.py": {
+    "mtime": 1777144633.6252975,
+    "hash": "a32f62d18dd64902f2679cb6061160df"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/resolver.py": {
+    "mtime": 1777659995.1863112,
+    "hash": "7b76706ca2f7417c278f174597f32cd1"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/nextstep.md": {
+    "mtime": 1775822537.9471738,
+    "hash": "35147f036271f94d904f519609ee14d7"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/analysis_results.md": {
+    "mtime": 1775770718.021513,
+    "hash": "b1de72126e4b7f8ec1d00498e24741f7"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/knowledge_base.md": {
+    "mtime": 1778051845.3489606,
+    "hash": "8c0bfa4ea50e4788154a5636c1fba304"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/README.md": {
+    "mtime": 1776776355.366634,
+    "hash": "41920c601e1275f62ff071799c4e581a"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/ast_output.png": {
+    "mtime": 1775540784.0737941,
+    "hash": "b5b698fa8a9493af24f8271f1ee39433"
+  }
+}

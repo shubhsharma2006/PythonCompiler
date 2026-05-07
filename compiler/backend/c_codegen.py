@@ -21,6 +21,7 @@ from compiler.runtime import CRuntimeSupport
 class CCodeGenerator:
     def __init__(self) -> None:
         self.runtime = CRuntimeSupport()
+        self._temp_id = 0
 
     def generate(self, module: IRModule) -> str:
         lines = [
@@ -145,6 +146,10 @@ class CCodeGenerator:
                         instruction.value_type == ValueType.STRING
                         and instruction.op == "+"
                     ):
+                        if type_map.get(instruction.target) == ValueType.STRING:
+                            lines.append(
+                                f"    py_decref({instruction.target});"
+                            )
                         lines.append(
                             f"    {instruction.target} = "
                             f"py_str_concat({instruction.left}, {instruction.right});"
@@ -213,8 +218,21 @@ class CCodeGenerator:
                     call_text = self._emit_call(instruction, type_map)
 
                     if instruction.target is None:
-                        lines.append(f"    {call_text};")
+                        if instruction.value_type == ValueType.STRING:
+                            temp_name = self._next_temp()
+                            lines.append(
+                                f"    const char *{temp_name} = {call_text};"
+                            )
+                            lines.append(
+                                f"    py_decref({temp_name});"
+                            )
+                        else:
+                            lines.append(f"    {call_text};")
                     else:
+                        if type_map.get(instruction.target) == ValueType.STRING:
+                            lines.append(
+                                f"    py_decref({instruction.target});"
+                            )
                         lines.append(
                             f"    {instruction.target} = {call_text};"
                         )
@@ -252,6 +270,12 @@ class CCodeGenerator:
                 )
 
             elif isinstance(terminator, ReturnTerminator):
+                if terminator.value is not None:
+                    ret_type = type_map.get(terminator.value, ValueType.UNKNOWN)
+                    if ret_type == ValueType.STRING:
+                        lines.append(
+                            f"    py_incref({terminator.value});"
+                        )
 
                 lines.extend(self._emit_decref_locals(function))
 
@@ -264,6 +288,11 @@ class CCodeGenerator:
                     )
 
         return lines
+
+    def _next_temp(self) -> str:
+        name = f"__tmp{self._temp_id}"
+        self._temp_id += 1
+        return name
 
     def _emit_call(
         self,

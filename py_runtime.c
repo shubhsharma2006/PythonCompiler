@@ -3,56 +3,155 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
-#include <stdint.h>
+
+#define PY_GC_FLAG_LIVE 0x1u
 
 typedef struct {
-    uint32_t magic;
-    int refcount;
-} PyObjectHeader;
+    const char *name;
+    py_destroy_fn destroy;
+    py_visit_fn visit;
+} PyTypeInfo;
 
-static const uint32_t PY_RC_MAGIC = 0xC0FFEEu;
+static PyObjectHeader *gc_head = NULL;
+static PyObjectHeader *gc_tail = NULL;
+static size_t gc_live_count = 0;
+static size_t gc_total_allocs = 0;
+static size_t gc_total_frees = 0;
 
-void *py_malloc(size_t size) {
-    PyObjectHeader *header = (PyObjectHeader *)malloc(sizeof(PyObjectHeader) + size);
-    if (!header) {
-        return NULL;
+static PyTypeInfo type_registry[256] = {
+    [PY_TYPE_UNKNOWN] = {"unknown", NULL, NULL},
+    [PY_TYPE_STR] = {"str", NULL, NULL},
+    [PY_TYPE_LIST] = {"list", NULL, NULL},
+    [PY_TYPE_DICT] = {"dict", NULL, NULL},
+    [PY_TYPE_SET] = {"set", NULL, NULL},
+    [PY_TYPE_TUPLE] = {"tuple", NULL, NULL},
+    [PY_TYPE_OBJECT] = {"object", NULL, NULL},
+    [PY_TYPE_FUNCTION] = {"function", NULL, NULL},
+};
+
+static PyObjectHeader *py_lookup_header(void *obj) {
+    if (!obj) return NULL;
+    PyObjectHeader *p = gc_head;
+    while (p) {
+        if ((void *)(p + 1) == obj) {
+            return p;
+        }
+        p = p->gc_next;
     }
-    header->magic = PY_RC_MAGIC;
+    return NULL;
+}
+
+void gc_register(PyObjectHeader *header) {
+    if (!header) return;
+    header->gc_prev = gc_tail;
+    header->gc_next = NULL;
+    if (gc_tail) {
+        gc_tail->gc_next = header;
+    } else {
+        gc_head = header;
+    }
+    gc_tail = header;
+    gc_live_count += 1;
+    gc_total_allocs += 1;
+}
+
+void gc_unregister(PyObjectHeader *header) {
+    if (!header) return;
+    if (header->gc_prev) {
+        header->gc_prev->gc_next = header->gc_next;
+    } else {
+        gc_head = header->gc_next;
+    }
+    if (header->gc_next) {
+        header->gc_next->gc_prev = header->gc_prev;
+    } else {
+        gc_tail = header->gc_prev;
+    }
+    header->gc_next = NULL;
+    header->gc_prev = NULL;
+    if (gc_live_count > 0) gc_live_count -= 1;
+    gc_total_frees += 1;
+}
+
+void *py_malloc_site(size_t size, int type_id, const char *file, int line) {
+    PyObjectHeader *header = (PyObjectHeader *)malloc(sizeof(PyObjectHeader) + size);
+    if (!header) return NULL;
     header->refcount = 1;
+    header->type_id = type_id;
+    header->flags = PY_GC_FLAG_LIVE;
+    header->gc_next = NULL;
+    header->gc_prev = NULL;
+    header->alloc_file = file;
+    header->alloc_line = line;
+    gc_register(header);
     return (void *)(header + 1);
 }
 
-static PyObjectHeader *py_header(void *obj) {
-    if (!obj) {
-        return NULL;
-    }
-    PyObjectHeader *header = ((PyObjectHeader *)obj) - 1;
-    if (header->magic != PY_RC_MAGIC) {
-        return NULL;
-    }
-    return header;
+void *py_malloc(size_t size, int type_id) {
+    return py_malloc_site(size, type_id, NULL, 0);
 }
 
 void py_incref(void *obj) {
-    PyObjectHeader *header = py_header(obj);
-    if (!header) {
-        return;
-    }
+    PyObjectHeader *header = py_lookup_header(obj);
+    if (!header) return;
     header->refcount += 1;
 }
 
 void py_decref(void *obj) {
-    PyObjectHeader *header = py_header(obj);
-    if (!header) {
-        return;
-    }
+    PyObjectHeader *header = py_lookup_header(obj);
+    if (!header) return;
     header->refcount -= 1;
     if (header->refcount <= 0) {
+        PyTypeInfo *info = &type_registry[header->type_id & 0xFF];
+        if (info && info->destroy) {
+            info->destroy(obj);
+        }
+        gc_unregister(header);
         free(header);
     }
 }
 
+size_t py_gc_count(void) {
+    return gc_live_count;
+}
+
+void py_gc_collect(void) {
+    /* scaffolding: log live objects; no sweep yet */
+    fprintf(stderr, "[py_gc_collect] live objects = %zu\n", py_gc_count());
+}
+
+void py_dump_live_objects(void) {
+    fprintf(stderr, "Leaked Objects:\n----------------\n");
+    PyObjectHeader *p = gc_head;
+    while (p) {
+        const char *name = type_registry[p->type_id & 0xFF].name;
+        if (!name) name = "unknown";
+        const char *file = p->alloc_file ? p->alloc_file : "<unknown>";
+        int line = p->alloc_line;
+        fprintf(stderr, "%s @ %p refcount=%d\n", name, (void *)(p + 1), p->refcount);
+        fprintf(stderr, "Allocated at: %s:%d\n", file, line);
+        p = p->gc_next;
+    }
+    fprintf(stderr, "Total allocs: %zu, frees: %zu, live: %zu\n", gc_total_allocs, gc_total_frees, gc_live_count);
+}
+
+void py_register_type(int type_id, const char *name, py_destroy_fn destroy, py_visit_fn visit) {
+    if (type_id < 0 || type_id >= 256) return;
+    type_registry[type_id].name = name ? name : "unknown";
+    type_registry[type_id].destroy = destroy;
+    type_registry[type_id].visit = visit;
+}
+
+void py_visit_children(void *obj, void (*visit)(void *child, void *ctx), void *ctx) {
+    PyObjectHeader *header = py_lookup_header(obj);
+    if (!header) return;
+    PyTypeInfo *info = &type_registry[header->type_id & 0xFF];
+    if (info && info->visit) {
+        info->visit(obj, visit, ctx);
+    }
+}
+
+/* ----- existing runtime helpers ----- */
 void py_print_int(int value) {
     printf("%d\n", value);
 }
@@ -86,13 +185,15 @@ void py_write_bool(int value) {
 }
 
 const char *py_int_to_str(int value) {
-    char *buf = (char *)py_malloc(32);
+    char *buf = (char *)py_malloc(32, PY_TYPE_STR);
+    if (!buf) return "";
     snprintf(buf, 32, "%d", value);
     return buf;
 }
 
 const char *py_float_to_str(double value) {
-    char *buf = (char *)py_malloc(64);
+    char *buf = (char *)py_malloc(64, PY_TYPE_STR);
+    if (!buf) return "";
     snprintf(buf, 64, "%g", value);
     return buf;
 }
@@ -110,7 +211,8 @@ const char *py_str_concat(const char *a, const char *b) {
     const char *sb = b ? b : "";
     size_t la = strlen(sa);
     size_t lb = strlen(sb);
-    char *result = (char *)py_malloc(la + lb + 1);
+    char *result = (char *)py_malloc(la + lb + 1, PY_TYPE_STR);
+    if (!result) return "";
     memcpy(result, sa, la);
     memcpy(result + la, sb, lb + 1);
     return result;
