@@ -46,7 +46,7 @@ from compiler.core.ast import (
     ExprStmt,
 )
 from compiler.core.types import ValueType
-from compiler.frontend import LexedSource, ParsedModule, lex_source, lower_cst, parse_tokens
+from compiler.frontend import LexedSource, ParsedModule, lex_source, lower_cst, parse_tokens, parse_to_program
 from compiler.ir import (
     CFGConstantPropagation,
     IRGenerator,
@@ -1128,19 +1128,26 @@ def _analyze_source(
     source: str,
     *,
     filename: str = "<stdin>",
+    frontend: str = "owned",
 ) -> CompilationResult:
     errors = ErrorHandler(source=source, filename=filename)
     lexed = lex_source(source, filename, errors)
     if lexed is None or errors.has_errors():
         return CompilationResult(success=False, errors=errors, lexed=lexed)
 
-    parsed = parse_tokens(lexed, errors)
-    if parsed is None or errors.has_errors():
-        return CompilationResult(success=False, errors=errors, lexed=lexed, parsed=parsed)
+    parsed = None
+    if frontend == "owned":
+        program = parse_to_program(lexed, errors)
+        if program is None or errors.has_errors():
+            return CompilationResult(success=False, errors=errors, lexed=lexed, program=program)
+    else:
+        parsed = parse_tokens(lexed, errors)
+        if parsed is None or errors.has_errors():
+            return CompilationResult(success=False, errors=errors, lexed=lexed, parsed=parsed)
 
-    program = lower_cst(parsed, errors)
-    if program is None or errors.has_errors():
-        return CompilationResult(success=False, errors=errors, lexed=lexed, parsed=parsed, program=program)
+        program = lower_cst(parsed, errors)
+        if program is None or errors.has_errors():
+            return CompilationResult(success=False, errors=errors, lexed=lexed, parsed=parsed, program=program)
 
     semantic = SemanticAnalyzer(errors).analyze(program)
     if errors.has_errors():
@@ -1173,8 +1180,9 @@ def execute_source(
     source: str,
     *,
     filename: str = "<stdin>",
+    frontend: str = "owned",
 ) -> CompilationResult:
-    result = _analyze_source(source, filename=filename)
+    result = _analyze_source(source, filename=filename, frontend=frontend)
     if not result.success or result.program is None:
         return result
 
@@ -1200,8 +1208,9 @@ def compile_source(
     filename: str = "<stdin>",
     output: str = "output.c",
     run: bool = False,
+    frontend: str = "owned",
 ) -> CompilationResult:
-    result = _analyze_source(source, filename=filename)
+    result = _analyze_source(source, filename=filename, frontend=frontend)
     if not result.success or result.program is None or result.semantic is None:
         return result
     if _program_uses_imports(result.program):

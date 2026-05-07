@@ -1,9 +1,16 @@
 #ifndef PY_RUNTIME_H
 #define PY_RUNTIME_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Reference-counted allocation helpers */
+void *py_malloc(size_t size);
+void py_incref(void *obj);
+void py_decref(void *obj);
 
 /* Print with newline */
 void py_print_int(int value);

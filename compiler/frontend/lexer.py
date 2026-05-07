@@ -1,35 +1,45 @@
 from __future__ import annotations
 
-import io
-import tokenize
-
+from compiler.frontend.owned_lexer import tokenize_source
 from compiler.frontend.source import SourceFile
+from compiler.frontend.source_map import Severity
+from compiler.frontend.token_types import cpython_kind, cpython_exact_kind, TokenType
 from compiler.frontend.tokens import LexToken, LexedSource
 from compiler.utils.error_handler import ErrorHandler
 
 
 def lex_source(source: str, filename: str, errors: ErrorHandler) -> LexedSource | None:
     source_file = SourceFile(filename=filename, text=source)
-    stream = io.StringIO(source).readline
-    tokens: list[LexToken] = []
+    owned_tokens, diagnostics = tokenize_source(source)
 
-    try:
-        for token_info in tokenize.generate_tokens(stream):
-            kind = tokenize.tok_name.get(token_info.type, str(token_info.type))
-            tokens.append(
-                LexToken(
-                    kind=kind,
-                    text=token_info.string,
-                    line=token_info.start[0],
-                    column=token_info.start[1],
-                    end_line=token_info.end[0],
-                    end_column=token_info.end[1],
-                    exact_kind=tokenize.tok_name.get(token_info.exact_type, kind),
-                )
+    # Forward any lexer diagnostics to the project error handler
+    for diagnostic in diagnostics:
+        if diagnostic.severity == Severity.ERROR:
+            errors.error(
+                "Syntax",
+                diagnostic.message,
+                diagnostic.location.line,
+                diagnostic.location.column,
             )
-    except (tokenize.TokenError, IndentationError) as exc:
-        message, location = exc.args if len(exc.args) == 2 else (str(exc), (1, 0))
-        errors.error("Lexical", message, location[0], location[1])
+
+    if errors.has_errors():
         return None
+
+    # Convert owned tokens into the downstream LexToken format
+    tokens: list[LexToken] = []
+    for tok in owned_tokens:
+        kind = cpython_kind(tok.type)
+        exact = cpython_exact_kind(tok.type)
+        tokens.append(
+            LexToken(
+                kind=kind,
+                text=tok.text,
+                line=tok.line,
+                column=tok.column,
+                end_line=tok.end_line,
+                end_column=tok.end_column,
+                exact_kind=exact,
+            )
+        )
 
     return LexedSource(source=source_file, tokens=tokens)

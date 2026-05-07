@@ -225,6 +225,36 @@ SOURCE_TESTS = [
         "expected": ["enter", "enter", "body", "body", "exit", "exit"],
     },
     {
+        "name": "Phase 3: __str__ dispatch",
+        "source": """class Box:\n    def __str__(self):\n        return "box"\n\nprint(Box())\n""",
+        "expected": ["box"],
+    },
+    {
+        "name": "Phase 3: __len__ dispatch",
+        "source": """class Bag:\n    def __len__(self):\n        return 3\n\nprint(len(Bag()))\n""",
+        "expected": ["3"],
+    },
+    {
+        "name": "Phase 3: __getitem__ and __setitem__ dispatch",
+        "source": """class Box:\n    def __init__(self):\n        self.first = 1\n    def __getitem__(self, index):\n        if index == 0:\n            return self.first\n        return -1\n    def __setitem__(self, index, value):\n        if index == 0:\n            self.first = value\n\nbox = Box()\nprint(box[0])\nbox.__setitem__(0, 5)\nprint(box[0])\n""",
+        "expected": ["1", "5"],
+    },
+    {
+        "name": "Phase 3: __iter__ and __next__ dispatch",
+        "source": """class Counter:\n    def __init__(self, limit):\n        self.limit = limit\n        self.value = 0\n    def __iter__(self):\n        return self\n    def __next__(self):\n        if self.value >= self.limit:\n            raise StopIteration\n        current = self.value\n        self.value = self.value + 1\n        return current\n\ncount = 0\nfor item in Counter(3):\n    count = count + item\nprint(count)\n""",
+        "expected": ["3"],
+    },
+    {
+        "name": "Phase 3: __eq__ dispatch",
+        "source": """class Point:\n    def __init__(self, value):\n        self.value = value\n    def __eq__(self, other):\n        return self.value == other.value\n\nprint(Point(3) == Point(3))\nprint(Point(3) == Point(4))\n""",
+        "expected": ["True", "False"],
+    },
+    {
+        "name": "Phase 3: __lt__ dispatch",
+        "source": """class Box:\n    def __init__(self, value):\n        self.value = value\n    def __lt__(self, other):\n        return self.value < other.value\n\nprint(Box(1) < Box(2))\nprint(Box(2) < Box(1))\n""",
+        "expected": ["True", "False"],
+    },
+    {
         "name": "Dicts sets and container methods",
         "source": """d = {"a": 1, "b": 2}\nprint(d["a"])\nprint(len(d))\nprint(d.get("b"))\ns = {1, 2}\ns.add(3)\nprint(3 in s)\n""",
         "expected": ["1", "2", "2", "True"],
@@ -331,6 +361,9 @@ SOURCE_TESTS = [
     },
 ]
 
+# Backward-compatible alias used by parser equivalence tests
+INLINE_TESTS = SOURCE_TESTS
+
 
 NEGATIVE_TESTS = [
     {
@@ -405,8 +438,8 @@ NEGATIVE_TESTS = [
     },
     {
         "name": "Reject invalid with-as target",
-        "source": "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, exc_type, exc, tb):\n        pass\nwith CM() as (a, b):\n    print(a)\n",
-        "expected_substring": "only simple name targets in with-as clauses are supported",
+        "source": "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, exc_type, exc, tb):\n        pass\nwith CM() as (a, b):\n    print(1)\n",
+        "expected_substring": "Syntax Error",
     },
     {
         "name": "Reject bare raise outside except",

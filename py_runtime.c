@@ -4,6 +4,54 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
+
+typedef struct {
+    uint32_t magic;
+    int refcount;
+} PyObjectHeader;
+
+static const uint32_t PY_RC_MAGIC = 0xC0FFEEu;
+
+void *py_malloc(size_t size) {
+    PyObjectHeader *header = (PyObjectHeader *)malloc(sizeof(PyObjectHeader) + size);
+    if (!header) {
+        return NULL;
+    }
+    header->magic = PY_RC_MAGIC;
+    header->refcount = 1;
+    return (void *)(header + 1);
+}
+
+static PyObjectHeader *py_header(void *obj) {
+    if (!obj) {
+        return NULL;
+    }
+    PyObjectHeader *header = ((PyObjectHeader *)obj) - 1;
+    if (header->magic != PY_RC_MAGIC) {
+        return NULL;
+    }
+    return header;
+}
+
+void py_incref(void *obj) {
+    PyObjectHeader *header = py_header(obj);
+    if (!header) {
+        return;
+    }
+    header->refcount += 1;
+}
+
+void py_decref(void *obj) {
+    PyObjectHeader *header = py_header(obj);
+    if (!header) {
+        return;
+    }
+    header->refcount -= 1;
+    if (header->refcount <= 0) {
+        free(header);
+    }
+}
 
 void py_print_int(int value) {
     printf("%d\n", value);
@@ -38,13 +86,13 @@ void py_write_bool(int value) {
 }
 
 const char *py_int_to_str(int value) {
-    char *buf = (char *)malloc(32);
+    char *buf = (char *)py_malloc(32);
     snprintf(buf, 32, "%d", value);
     return buf;
 }
 
 const char *py_float_to_str(double value) {
-    char *buf = (char *)malloc(64);
+    char *buf = (char *)py_malloc(64);
     snprintf(buf, 64, "%g", value);
     return buf;
 }
@@ -62,7 +110,7 @@ const char *py_str_concat(const char *a, const char *b) {
     const char *sb = b ? b : "";
     size_t la = strlen(sa);
     size_t lb = strlen(sb);
-    char *result = (char *)malloc(la + lb + 1);
+    char *result = (char *)py_malloc(la + lb + 1);
     memcpy(result, sa, la);
     memcpy(result + la, sb, lb + 1);
     return result;

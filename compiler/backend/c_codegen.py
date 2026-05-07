@@ -112,15 +112,31 @@ class CCodeGenerator:
             for instruction in block.instructions:
 
                 if isinstance(instruction, LoadConst):
+                    if instruction.value_type == ValueType.STRING:
+                        lines.append(
+                            f"    py_decref({instruction.target});"
+                        )
                     lines.append(
                         f"    {instruction.target} = "
                         f"{self._literal(instruction.value, instruction.value_type)};"
                     )
+                    if instruction.value_type == ValueType.STRING:
+                        lines.append(
+                            f"    py_incref({instruction.target});"
+                        )
 
                 elif isinstance(instruction, Assign):
+                    if type_map.get(instruction.target) == ValueType.STRING:
+                        lines.append(
+                            f"    py_decref({instruction.target});"
+                        )
                     lines.append(
                         f"    {instruction.target} = {instruction.source};"
                     )
+                    if type_map.get(instruction.target) == ValueType.STRING:
+                        lines.append(
+                            f"    py_incref({instruction.target});"
+                        )
 
                 elif isinstance(instruction, BinaryOp):
 
@@ -237,6 +253,8 @@ class CCodeGenerator:
 
             elif isinstance(terminator, ReturnTerminator):
 
+                lines.extend(self._emit_decref_locals(function))
+
                 if terminator.value is None:
                     lines.append("    return;")
 
@@ -268,6 +286,16 @@ class CCodeGenerator:
             return f"{converter}({instruction.args[0]})"
 
         return f"{instruction.func_name}({', '.join(instruction.args)})"
+
+    def _emit_decref_locals(self, function: IRFunction) -> list[str]:
+        lines: list[str] = []
+        params = set(name for name, _ in function.params)
+        for name, value_type in sorted(function.locals.items()):
+            if name in params:
+                continue
+            if value_type == ValueType.STRING:
+                lines.append(f"    py_decref({name});")
+        return lines
 
     @staticmethod
     def _build_type_map(

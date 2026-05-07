@@ -4,7 +4,7 @@ import builtins as py_builtins
 from typing import Protocol
 
 from compiler.vm.errors import VMError
-from compiler.vm.objects import ClassObject, InstanceObject, class_is_subclass, unwrap_runtime_value
+from compiler.vm.objects import ClassObject, InstanceObject, class_is_subclass, unwrap_runtime_value, py_load_attr
 
 
 class BuiltinHost(Protocol):
@@ -60,13 +60,27 @@ def builtin_range(*args):
     return range(*normalized)
 
 
-def builtin_len(*args):
+def builtin_len(host: BuiltinHost, *args):
     if len(args) != 1:
         raise VMError("len() expects exactly 1 argument")
     value = unwrap_runtime_value(args[0])
-    if not isinstance(value, (list, tuple, str, dict, set)):
-        raise VMError(f"len() expects a list, tuple, string, dict, or set, got {type(value).__name__}")
-    return len(value)
+    if isinstance(value, (list, tuple, str, dict, set)):
+        return len(value)
+
+    # VM object: attempt __len__ dispatch.
+    try:
+        method = py_load_attr(value, "__len__")
+    except VMError:
+        method = None
+
+    if method is not None:
+        result = host.invoke_builtin_callable(method)
+        result = unwrap_runtime_value(result)
+        if not isinstance(result, int) or isinstance(result, bool):
+            raise VMError("__len__() should return an int")
+        return result
+
+    raise VMError(f"len() expects a list, tuple, string, dict, or set, got {type(value).__name__}")
 
 
 def builtin_print(host: BuiltinHost, *args, sep=" ", end="\n", file=None, flush=False):
@@ -107,7 +121,7 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
         "print": lambda *args, sep=" ", end="\n", file=None, flush=False: builtin_print(
             host, *args, sep=sep, end=end, file=file, flush=flush
         ),
-        "len": builtin_len,
+    "len": lambda *args: builtin_len(host, *args),
         "range": builtin_range,
         "int": int,
         "float": float,

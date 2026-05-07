@@ -27,6 +27,7 @@ from compiler.vm.objects import (
     py_store_attr,
     py_truthy,
     py_unary_op,
+    unwrap_runtime_value,
 )
 
 
@@ -237,6 +238,34 @@ class BytecodeInterpreter:
         if op == "COMPARE_OP":
             right = frame.stack.pop()
             left = frame.stack.pop()
+            method_map = {
+                "==": "__eq__",
+                "!=": "__ne__",
+                "<": "__lt__",
+                "<=": "__le__",
+                ">": "__gt__",
+                ">=": "__ge__",
+            }
+
+            method_name = method_map.get(arg)
+            if method_name and isinstance(left, (InstanceObject, ClassObject)):
+                try:
+                    comparator = py_load_attr(left, method_name)
+                except VMError:
+                    comparator = None
+
+                if comparator is not None:
+                    if self._current_frame is None:
+                        raise VMError("no active frame for comparison dispatch")
+                    value = py_invoke_callable(
+                        comparator,
+                        [right],
+                        self._current_frame.module,
+                        kwargs=None,
+                        execute_function=self._execute_function,
+                    )
+                    frame.stack.append(py_truthy(value))
+                    return
 
             frame.stack.append(
                 py_compare_op(arg, left, right)
@@ -371,14 +400,61 @@ class BytecodeInterpreter:
             return
 
         if op == "GET_ITER":
-            frame.stack.append(iter(frame.stack.pop()))
+            target = frame.stack.pop()
+            try:
+                iterator_method = py_load_attr(target, "__iter__")
+            except VMError:
+                iterator_method = None
+
+            if iterator_method is not None:
+                if self._current_frame is None:
+                    raise VMError("no active frame for __iter__ dispatch")
+                iterator = py_invoke_callable(
+                    iterator_method,
+                    [],
+                    self._current_frame.module,
+                    kwargs=None,
+                    execute_function=self._execute_function,
+                )
+                frame.stack.append(iterator)
+                return
+
+            frame.stack.append(iter(unwrap_runtime_value(target)))
             return
 
         if op == "FOR_ITER":
             iterator = frame.stack[-1]
 
             try:
-                frame.stack.append(next(iterator))
+                try:
+                    next_method = py_load_attr(iterator, "__next__")
+                except VMError:
+                    next_method = None
+
+                if next_method is not None:
+                    if self._current_frame is None:
+                        raise VMError("no active frame for __next__ dispatch")
+                    value = py_invoke_callable(
+                        next_method,
+                        [],
+                        self._current_frame.module,
+                        kwargs=None,
+                        execute_function=self._execute_function,
+                    )
+                    frame.stack.append(value)
+                else:
+                    frame.stack.append(next(iterator))
+
+            except RaisedSignal as signal:
+                if (
+                    py_matches_exception(signal.value, StopIteration)
+                    or signal.value is StopIteration
+                    or (isinstance(signal.value, type) and issubclass(signal.value, StopIteration))
+                ):
+                    frame.stack.pop()
+                    frame.ip = int(arg)
+                    return
+                raise
 
             except StopIteration:
                 frame.stack.pop()
@@ -389,24 +465,71 @@ class BytecodeInterpreter:
         if op == "BINARY_SUBSCR":
             index = frame.stack.pop()
             collection = frame.stack.pop()
+            try:
+                getitem = py_load_attr(collection, "__getitem__")
+            except VMError:
+                getitem = None
 
-            frame.stack.append(
-                py_index_get(collection, index)
-            )
+            if getitem is not None:
+                if self._current_frame is None:
+                    raise VMError("no active frame for __getitem__ dispatch")
+                value = py_invoke_callable(
+                    getitem,
+                    [index],
+                    self._current_frame.module,
+                    kwargs=None,
+                    execute_function=self._execute_function,
+                )
+                frame.stack.append(value)
+            else:
+                frame.stack.append(
+                    py_index_get(collection, index)
+                )
             return
 
         if op == "DELETE_SUBSCR":
             index = frame.stack.pop()
             collection = frame.stack.pop()
-            py_index_delete(collection, index)
+            try:
+                delitem = py_load_attr(collection, "__delitem__")
+            except VMError:
+                delitem = None
+
+            if delitem is not None:
+                if self._current_frame is None:
+                    raise VMError("no active frame for __delitem__ dispatch")
+                py_invoke_callable(
+                    delitem,
+                    [index],
+                    self._current_frame.module,
+                    kwargs=None,
+                    execute_function=self._execute_function,
+                )
+            else:
+                py_index_delete(collection, index)
             return
 
         if op == "STORE_SUBSCR":
             value = frame.stack.pop()
             index = frame.stack.pop()
             collection = frame.stack.pop()
+            try:
+                setitem = py_load_attr(collection, "__setitem__")
+            except VMError:
+                setitem = None
 
-            py_index_set(collection, index, value)
+            if setitem is not None:
+                if self._current_frame is None:
+                    raise VMError("no active frame for __setitem__ dispatch")
+                py_invoke_callable(
+                    setitem,
+                    [index, value],
+                    self._current_frame.module,
+                    kwargs=None,
+                    execute_function=self._execute_function,
+                )
+            else:
+                py_index_set(collection, index, value)
             return
 
         if op == "LOAD_ATTR":
@@ -1019,6 +1142,35 @@ class BytecodeInterpreter:
     
 
     def format_value(self, value) -> str:
+        # Prefer user-defined __str__ / __repr__ for VM objects when available.
+        try:
+            if isinstance(value, (InstanceObject, ClassObject)):
+                try:
+                    formatter = py_load_attr(value, "__str__")
+                except VMError:
+                    formatter = None
+
+                if formatter is None:
+                    try:
+                        formatter = py_load_attr(value, "__repr__")
+                    except VMError:
+                        formatter = None
+
+                if formatter is not None:
+                    if self._current_frame is None:
+                        raise VMError("no active frame for __str__/__repr__ dispatch")
+                    rendered = py_invoke_callable(
+                        formatter,
+                        [],
+                        self._current_frame.module,
+                        kwargs=None,
+                        execute_function=self._execute_function,
+                    )
+                    return str(unwrap_runtime_value(rendered))
+        except VMError:
+            # Fall through to default formatting on errors.
+            pass
+
         return repr(value) if isinstance(value, float) else str(value)
 
     def current_globals(self):
