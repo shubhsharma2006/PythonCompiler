@@ -370,3 +370,8 @@ class MethodCallExpr(Expression):
 @dataclass
 class YieldFromExpr(Expression):
     value: Expression
+
+
+@dataclass
+class YieldExpr(Expression):
+    value: Expression | None

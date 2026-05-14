@@ -3,8 +3,10 @@ from __future__ import annotations
 import builtins as py_builtins
 from typing import Protocol
 
-from compiler.vm.errors import VMError
+from compiler.vm.errors import RaisedSignal, VMError
 from compiler.vm.objects import ClassObject, InstanceObject, class_is_subclass, unwrap_runtime_value, py_load_attr
+
+_MISSING = object()
 
 
 class BuiltinHost(Protocol):
@@ -125,6 +127,28 @@ def builtin_sorted(host: BuiltinHost, iterable, *, key=None, reverse=False):
         raise VMError(str(exc)) from None
 
 
+def builtin_iter(iterable):
+    iterable = unwrap_runtime_value(iterable)
+    try:
+        return iter(iterable)
+    except TypeError as exc:
+        raise VMError(str(exc)) from None
+
+
+def builtin_next(iterator, default=_MISSING):
+    iterator = unwrap_runtime_value(iterator)
+    try:
+        if default is _MISSING:
+            return next(iterator)
+        return next(iterator, unwrap_runtime_value(default))
+    except StopIteration as exc:
+        if default is not _MISSING:
+            return unwrap_runtime_value(default)
+        raise RaisedSignal(exc) from None
+    except TypeError as exc:
+        raise VMError(str(exc)) from None
+
+
 def build_builtins(host: BuiltinHost) -> dict[str, object]:
     return {
         "print": lambda *args, sep=" ", end="\n", file=None, flush=False: builtin_print(
@@ -161,8 +185,8 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
         "sorted": lambda iterable, *, key=None, reverse=False: builtin_sorted(
             host, iterable, key=key, reverse=reverse
         ),
-        "iter": iter,
-        "next": next,
+        "iter": builtin_iter,
+        "next": builtin_next,
         "abs": abs,
         "round": round,
         "min": min,

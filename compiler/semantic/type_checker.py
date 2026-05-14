@@ -50,6 +50,7 @@ from compiler.core.ast import (
     UnpackAssignStmt,
     WhileStmt,
     WithStmt,
+    YieldExpr,
 )
 from compiler.core.signature import bind_call_arguments
 from compiler.core.types import FunctionType, ValueType, can_truth_test, is_numeric, merge_types
@@ -135,7 +136,7 @@ class TypeChecker:
         self.current_function = previous
         self.local_functions.pop()
 
-        if function.return_type == ValueType.UNKNOWN and not function.has_value_return:
+        if function.return_type == ValueType.UNKNOWN and not function.has_value_return and not self._function_contains_yield(function.node.body):
             function.return_type = ValueType.VOID
         function.state = "done"
 
@@ -624,6 +625,13 @@ class TypeChecker:
             self._check_local_function(expr.func_def, scope, local_function)
             return self._set_expr_type(expr, ValueType.UNKNOWN)
 
+        if isinstance(expr, YieldExpr):
+            if expr.value is not None:
+                value_type = self._check_expr(expr.value, scope)
+                if value_type == ValueType.VOID:
+                    self._error(expr.value, "cannot yield a void expression")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
+
         if isinstance(expr, CallValueExpr):
             callee_type = self._check_expr(expr.callee, scope)
             if callee_type == ValueType.VOID:
@@ -786,8 +794,140 @@ class TypeChecker:
             self._check_statement(child, scope)
         self.current_function = previous
         self.local_functions.pop()
-        if local_function.return_type == ValueType.UNKNOWN and not local_function.has_value_return:
+        if local_function.return_type == ValueType.UNKNOWN and not local_function.has_value_return and not self._function_contains_yield(statement.body):
             local_function.return_type = ValueType.VOID
+
+    def _function_contains_yield(self, body: list[object]) -> bool:
+        return any(self._statement_contains_yield(statement) for statement in body)
+
+    def _statement_contains_yield(self, statement) -> bool:
+        if isinstance(statement, FunctionDef):
+            return False
+        if isinstance(statement, ClassDef):
+            return any(self._statement_contains_yield(method) for method in statement.methods)
+        if isinstance(statement, AssignStmt):
+            return self._expr_contains_yield(statement.value)
+        if isinstance(statement, UnpackAssignStmt):
+            return self._expr_contains_yield(statement.value)
+        if isinstance(statement, StarUnpackAssignStmt):
+            return self._expr_contains_yield(statement.value)
+        if isinstance(statement, AttributeAssignStmt):
+            return self._expr_contains_yield(statement.object) or self._expr_contains_yield(statement.value)
+        if isinstance(statement, DeleteStmt):
+            return any(self._expr_contains_yield(target) for target in statement.targets)
+        if isinstance(statement, PrintStmt):
+            return any(self._expr_contains_yield(value) for value in statement.values) or (
+                statement.sep is not None and self._expr_contains_yield(statement.sep)
+            ) or (
+                statement.end is not None and self._expr_contains_yield(statement.end)
+            )
+        if isinstance(statement, ExprStmt):
+            return self._expr_contains_yield(statement.expr)
+        if isinstance(statement, ReturnStmt):
+            return statement.value is not None and self._expr_contains_yield(statement.value)
+        if isinstance(statement, RaiseStmt):
+            return (
+                statement.value is not None and self._expr_contains_yield(statement.value)
+            ) or (
+                statement.cause is not None and self._expr_contains_yield(statement.cause)
+            )
+        if isinstance(statement, IfStmt):
+            return self._expr_contains_yield(statement.condition) or any(
+                self._statement_contains_yield(child) for child in statement.body + statement.orelse
+            )
+        if isinstance(statement, WhileStmt):
+            return self._expr_contains_yield(statement.condition) or any(
+                self._statement_contains_yield(child) for child in statement.body + statement.orelse
+            )
+        if isinstance(statement, ForStmt):
+            return self._expr_contains_yield(statement.iterator) or any(
+                self._statement_contains_yield(child) for child in statement.body + statement.orelse
+            )
+        if isinstance(statement, TryStmt):
+            return any(self._statement_contains_yield(child) for child in statement.body + statement.orelse + statement.finalbody) or any(
+                self._statement_contains_yield(child)
+                for handler in statement.handlers
+                for child in handler.body
+            )
+        if isinstance(statement, WithStmt):
+            return self._expr_contains_yield(statement.context_expr) or any(
+                self._statement_contains_yield(child) for child in statement.body
+            )
+        return False
+
+    def _expr_contains_yield(self, expr) -> bool:
+        if isinstance(expr, YieldExpr):
+            return True
+        if isinstance(expr, BinaryExpr):
+            return self._expr_contains_yield(expr.left) or self._expr_contains_yield(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return self._expr_contains_yield(expr.operand)
+        if isinstance(expr, CompareExpr):
+            return self._expr_contains_yield(expr.left) or self._expr_contains_yield(expr.right)
+        if isinstance(expr, CompareChainExpr):
+            return any(self._expr_contains_yield(operand) for operand in expr.operands)
+        if isinstance(expr, BoolOpExpr):
+            return self._expr_contains_yield(expr.left) or self._expr_contains_yield(expr.right)
+        if isinstance(expr, IfExpr):
+            return any(self._expr_contains_yield(part) for part in (expr.condition, expr.body, expr.orelse))
+        if isinstance(expr, LambdaExpr):
+            return False
+        if isinstance(expr, CallExpr):
+            return any(self._expr_contains_yield(arg.value) if isinstance(arg, StarredExpr) else self._expr_contains_yield(arg) for arg in expr.args) or any(
+                self._expr_contains_yield(arg) for arg in expr.kwargs.values()
+            ) or any(self._expr_contains_yield(part.value) for part in getattr(expr, "kw_starred", []))
+        if isinstance(expr, CallValueExpr):
+            return self._expr_contains_yield(expr.callee) or any(
+                self._expr_contains_yield(arg.value) if isinstance(arg, StarredExpr) else self._expr_contains_yield(arg)
+                for arg in expr.args
+            ) or any(self._expr_contains_yield(arg) for arg in expr.kwargs.values()) or any(
+                self._expr_contains_yield(part.value) for part in getattr(expr, "kw_starred", [])
+            )
+        if isinstance(expr, AttributeExpr):
+            return self._expr_contains_yield(expr.object)
+        if isinstance(expr, MethodCallExpr):
+            return self._expr_contains_yield(expr.object) or any(self._expr_contains_yield(arg) for arg in expr.args) or any(
+                self._expr_contains_yield(arg) for arg in expr.kwargs.values()
+            ) or any(self._expr_contains_yield(part.value) for part in getattr(expr, "kw_starred", []))
+        if isinstance(expr, ListExpr):
+            return any(self._expr_contains_yield(element) for element in expr.elements)
+        if isinstance(expr, TupleExpr):
+            return any(self._expr_contains_yield(element) for element in expr.elements)
+        if isinstance(expr, DictExpr):
+            return any(self._expr_contains_yield(key) for key in expr.keys) or any(
+                self._expr_contains_yield(value) for value in expr.values
+            )
+        if isinstance(expr, SetExpr):
+            return any(self._expr_contains_yield(element) for element in expr.elements)
+        if isinstance(expr, ListCompExpr):
+            return self._expr_contains_yield(expr.element) or any(
+                self._expr_contains_yield(generator.iterator) or any(self._expr_contains_yield(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, SetCompExpr):
+            return self._expr_contains_yield(expr.element) or any(
+                self._expr_contains_yield(generator.iterator) or any(self._expr_contains_yield(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, DictCompExpr):
+            return self._expr_contains_yield(expr.key) or self._expr_contains_yield(expr.value) or any(
+                self._expr_contains_yield(generator.iterator) or any(self._expr_contains_yield(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, IndexExpr):
+            return self._expr_contains_yield(expr.collection) or self._expr_contains_yield(expr.index)
+        if isinstance(expr, SliceExpr):
+            return any(
+                part is not None and self._expr_contains_yield(part)
+                for part in (expr.lower, expr.upper, expr.step)
+            )
+        if isinstance(expr, NamedExpr):
+            return self._expr_contains_yield(expr.value)
+        if isinstance(expr, StarredExpr):
+            return self._expr_contains_yield(expr.value)
+        if isinstance(expr, KwStarredExpr):
+            return self._expr_contains_yield(expr.value)
+        return False
 
     def _validate_call_shape(self, expr: CallExpr, function: FunctionType) -> None:
         # Calls with *args splats are dynamic in shape. Let runtime handle arity.

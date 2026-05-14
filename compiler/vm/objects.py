@@ -561,6 +561,8 @@ def py_invoke_callable(
         )
 
         if isinstance(initializer, BytecodeFunction):
+            if initializer.is_generator:
+                raise VMError("__init__ cannot be a generator function")
             bound_args = bind_function_args(
                 initializer.name,
                 initializer.params,

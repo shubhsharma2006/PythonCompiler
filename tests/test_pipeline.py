@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from compiler import compile_source, execute_source
+from compiler import check_source, compile_source, execute_source
 
 
 class PipelineTests(unittest.TestCase):
@@ -61,6 +61,13 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("py_write_int", c_code)
         self.assertIn('#include "py_runtime.h"', c_code)
         self.assertTrue(all(not block.phis for block in result.ir.main.blocks))
+
+    def test_check_source_defaults_to_validated_owned_frontend(self):
+        result = check_source("print(1)\n", filename="inline.py")
+        self.assertTrue(result.success, result.errors.render())
+        self.assertIsNotNone(result.lexed)
+        self.assertIsNotNone(result.parsed)
+        self.assertIsNotNone(result.program)
 
     def test_execute_source_returns_bytecode_and_output(self):
         result, run_output, rendered = self.execute_program("print(7)\n")
@@ -764,6 +771,49 @@ class PipelineTests(unittest.TestCase):
         result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
         self.assertFalse(result.success)
         self.assertIn("missing required keyword-only argument 'flag'", rendered)
+
+    def test_execute_source_supports_generators_with_next(self):
+        result, run_output, rendered = self.execute_program(
+            "def gen():\n"
+            "    yield 1\n"
+            "    x = yield 2\n"
+            "    print(x is None)\n"
+            "    yield 3\n\n"
+            "g = gen()\n"
+            "print(next(g))\n"
+            "print(next(g))\n"
+            "print(next(g))\n"
+            "try:\n"
+            "    next(g)\n"
+            "except StopIteration:\n"
+            "    print(\"done\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["1", "2", "True", "3", "done"])
+
+    def test_execute_source_supports_generators_in_for_loops(self):
+        result, run_output, rendered = self.execute_program(
+            "def count(n):\n"
+            "    i = 0\n"
+            "    while i < n:\n"
+            "        yield i\n"
+            "        i = i + 1\n\n"
+            "for value in count(3):\n"
+            "    print(value)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["0", "1", "2"])
+
+    def test_compile_source_rejects_generators_for_native_path(self):
+        result, _, _, rendered, _, _, _, _ = self.compile_program(
+            "def gen():\n"
+            "    yield 1\n"
+            "for value in gen():\n"
+            "    print(value)\n",
+            run=False,
+        )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support generators or yield yet", rendered)
 
     def test_invalid_syntax_is_fatal(self):
         result, _, _, rendered, _, _, _, _ = self.compile_program("x = 1 $ 2\n", run=False)

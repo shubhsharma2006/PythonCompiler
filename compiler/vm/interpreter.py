@@ -6,7 +6,7 @@ from typing import Callable
 
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule
 from compiler.vm.builtins import build_builtins
-from compiler.vm.errors import RaisedSignal, ReturnSignal, VMError
+from compiler.vm.errors import RaisedSignal, ReturnSignal, VMError, YieldSignal
 from compiler.vm.objects import (
     ClassObject,
     Closure,
@@ -56,6 +56,22 @@ class Frame:
     @property
     def is_module(self) -> bool:
         return self.function.name == "<module>"
+
+
+@dataclass
+class GeneratorObject:
+    interpreter: "BytecodeInterpreter"
+    frame: Frame
+    started: bool = False
+    running: bool = False
+    finished: bool = False
+    return_value: object | None = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self.interpreter._resume_generator(self)
 
 
 class BytecodeInterpreter:
@@ -111,6 +127,29 @@ class BytecodeInterpreter:
         module: ModuleObject,
         closure_scopes: list[dict[str, object]] | None = None,
     ):
+        frame = self._make_frame(
+            function,
+            bound_args,
+            module,
+            closure_scopes,
+        )
+
+        if function.is_generator:
+            return GeneratorObject(
+                interpreter=self,
+                frame=frame,
+            )
+
+        _, value = self._run_frame(frame)
+        return value
+
+    def _make_frame(
+        self,
+        function: BytecodeFunction,
+        bound_args: dict[str, object],
+        module: ModuleObject,
+        closure_scopes: list[dict[str, object]] | None = None,
+    ) -> Frame:
         frame = Frame(
             module=module,
             function=function,
@@ -119,29 +158,75 @@ class BytecodeInterpreter:
         )
 
         frame.locals.update(bound_args)
+        return frame
 
+    def _run_frame(
+        self,
+        frame: Frame,
+        *,
+        stop_on_yield: bool = False,
+    ) -> tuple[str, object | None]:
+        previous_frame = self._current_frame
         try:
-            while frame.ip < len(function.instructions):
+            while frame.ip < len(frame.function.instructions):
                 self._current_frame = frame
 
-                instruction = function.instructions[frame.ip]
+                instruction = frame.function.instructions[frame.ip]
                 frame.ip += 1
 
                 try:
                     self._execute_instruction(frame, instruction)
 
+                except YieldSignal as signal:
+                    if not stop_on_yield:
+                        raise VMError("yield reached outside generator execution") from None
+                    return "yield", signal.value
+
                 except ReturnSignal as signal:
                     if not self._handle_return(frame, signal):
-                        raise
+                        return "return", signal.value
 
                 except RaisedSignal as signal:
                     if not self._handle_exception(frame, signal):
                         raise
 
-        except ReturnSignal as signal:
-            return signal.value
+            return "return", None
+        finally:
+            self._current_frame = previous_frame
 
-        return None
+    def _resume_generator(
+        self,
+        generator: GeneratorObject,
+        value: object | None = None,
+    ) -> object:
+        if generator.finished:
+            raise StopIteration(generator.return_value)
+
+        if generator.running:
+            raise VMError("generator already executing")
+
+        generator.running = True
+        try:
+            if generator.started:
+                generator.frame.stack.append(value)
+            else:
+                generator.started = True
+                if value is not None:
+                    raise VMError("cannot send a non-None value to a just-started generator")
+
+            status, payload = self._run_frame(
+                generator.frame,
+                stop_on_yield=True,
+            )
+
+            if status == "yield":
+                return payload
+
+            generator.finished = True
+            generator.return_value = payload
+            raise StopIteration(payload)
+        finally:
+            generator.running = False
 
     def _execute_instruction(self, frame: Frame, instruction) -> None:
         op = instruction.opcode
@@ -908,6 +993,10 @@ class BytecodeInterpreter:
             cause = frame.stack.pop()
             value = frame.stack.pop()
             raise RaisedSignal(value, cause=cause)
+
+        if op == "YIELD_VALUE":
+            value = frame.stack.pop() if frame.stack else None
+            raise YieldSignal(value)
 
         if op == "RETURN_VALUE":
             raise ReturnSignal(

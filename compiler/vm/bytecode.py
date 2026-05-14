@@ -18,6 +18,7 @@ class BytecodeFunction:
     name: str
     params: list[str]
     owner_class_name: str | None = None
+    is_generator: bool = False
     kwonly_params: list[str] = field(default_factory=list)
     kwonly_defaults: dict[str, object] = field(default_factory=dict)
     vararg_name: str | None = None
@@ -28,7 +29,8 @@ class BytecodeFunction:
     nonlocal_names: set[str] = field(default_factory=set)
 
     def __str__(self) -> str:
-        lines = [f"function {self.name} [{self.key}] ({', '.join(self.params)})"]
+        prefix = "generator " if self.is_generator else "function "
+        lines = [f"{prefix}{self.name} [{self.key}] ({', '.join(self.params)})"]
         for index, instruction in enumerate(self.instructions):
             lines.append(f"  {index:04}: {instruction}")
         return "\n".join(lines)

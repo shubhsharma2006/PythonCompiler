@@ -183,6 +183,15 @@ class FrontendTests(unittest.TestCase):
         self.assertIsNotNone(program)
         self.assertFalse(errors.has_errors(), errors.render())
 
+    def test_lowers_generator_function(self):
+        _, _, program, errors = self.frontend(
+            "def gen():\n"
+            "    yield 1\n"
+            "    yield 2\n"
+        )
+        self.assertIsNotNone(program)
+        self.assertFalse(errors.has_errors(), errors.render())
+
     def test_lowers_class_methods_and_attributes(self):
         _, _, program, errors = self.frontend(
             "class Counter:\n"

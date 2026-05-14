@@ -6,7 +6,7 @@ from compiler.core.ast import (
     DictCompExpr, DictExpr, Expression, IfExpr, IndexExpr,
     KwStarredExpr, LambdaExpr, ListCompExpr, ListExpr, MethodCallExpr,
     NameExpr, NamedExpr, ReturnStmt, SetCompExpr, SetExpr, SliceExpr,
-    SourceSpan, StarredExpr, TupleExpr, UnaryExpr, FunctionDef,
+    SourceSpan, StarredExpr, TupleExpr, UnaryExpr, FunctionDef, YieldExpr,
 )
 from compiler.frontend.parser.token_cursor import ParseError, TokenCursor
 from compiler.frontend.parser.precedence import (
@@ -68,6 +68,8 @@ class ExprParser:
                 return self._parse_unary()
             if tok.text == "lambda":
                 return self._parse_lambda()
+            if tok.text == "yield":
+                return self._parse_yield()
             self.cursor.advance()
             return NameExpr(span=self.cursor.span_from(tok), name=tok.text)
         # Unary operators
@@ -98,6 +100,18 @@ class ExprParser:
         bp = UNARY_OPS.get(tok.text, BP_UNARY)
         operand = self.parse_expression(bp)
         return UnaryExpr(span=self.cursor.span_from(tok), op=tok.text, operand=operand)
+
+    def _parse_yield(self) -> Expression:
+        tok = self.cursor.advance()
+        if self.cursor.peek_kind() == "NAME" and self.cursor.peek_text() == "from":
+            from_tok = self.cursor.advance()
+            raise ParseError("'yield from' is not supported yet", from_tok.line, from_tok.column)
+        if self.cursor.peek_kind() in ("NEWLINE", "NL", "DEDENT", "ENDMARKER"):
+            return YieldExpr(span=self.cursor.span_from(tok), value=None)
+        if self.cursor.peek_kind() == "OP" and self.cursor.peek_text() in {")", "]", "}", ",", ":"}:
+            return YieldExpr(span=self.cursor.span_from(tok), value=None)
+        value = self.parse_expression(BP_NONE)
+        return YieldExpr(span=self.cursor.span_from(tok), value=value)
 
     def _parse_string(self) -> Expression:
         tok = self.cursor.advance()

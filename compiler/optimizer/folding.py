@@ -41,6 +41,7 @@ from compiler.core.ast import (
     UnpackAssignStmt,
     WhileStmt,
     WithStmt,
+    YieldExpr,
 )
 
 
@@ -242,6 +243,11 @@ class ConstantFolder:
 
         if isinstance(expr, LambdaExpr):
             expr.func_def.body = self._optimize_statements(expr.func_def.body)
+            return expr
+
+        if isinstance(expr, YieldExpr):
+            if expr.value is not None:
+                expr.value = self._optimize_expr(expr.value)
             return expr
 
         if isinstance(expr, IndexExpr):

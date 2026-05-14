@@ -51,6 +51,7 @@ from compiler.core.ast import (
     UnpackAssignStmt,
     WhileStmt,
     WithStmt,
+    YieldExpr,
 )
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule, Instruction
 
@@ -117,6 +118,7 @@ class BytecodeLowerer:
 
         lowered.key = function_key
         lowered.owner_class_name = owner_class_name
+        lowered.is_generator = self._function_uses_yield(function.body)
 
         lowered.defaults = [
             self._literal_default(default)
@@ -851,6 +853,19 @@ class BytecodeLowerer:
             )
             return
 
+        if isinstance(expr, YieldExpr):
+            if expr.value is None:
+                instructions.append(Instruction("LOAD_CONST", None))
+            else:
+                self._emit_expr(
+                    expr.value,
+                    instructions,
+                    parent_key,
+                    name_bindings,
+                )
+            instructions.append(Instruction("YIELD_VALUE"))
+            return
+
         if isinstance(expr, CallExpr):
 
             star_flags = [isinstance(arg, StarredExpr) for arg in expr.args]
@@ -1258,6 +1273,141 @@ class BytecodeLowerer:
         instructions.append(
             Instruction("LOAD_CONST", None)
         )
+
+    def _function_uses_yield(self, body: list[object]) -> bool:
+        return any(self._statement_uses_yield(statement) for statement in body)
+
+    def _statement_uses_yield(self, statement) -> bool:
+        if isinstance(statement, FunctionDef):
+            return False
+        if isinstance(statement, ClassDef):
+            return any(self._statement_uses_yield(method) for method in statement.methods)
+        if isinstance(statement, AssignStmt):
+            return self._expr_uses_yield(statement.value)
+        if isinstance(statement, UnpackAssignStmt):
+            return self._expr_uses_yield(statement.value)
+        if isinstance(statement, StarUnpackAssignStmt):
+            return self._expr_uses_yield(statement.value)
+        if isinstance(statement, AttributeAssignStmt):
+            return self._expr_uses_yield(statement.object) or self._expr_uses_yield(statement.value)
+        if isinstance(statement, DeleteStmt):
+            return any(self._expr_uses_yield(target) for target in statement.targets)
+        if isinstance(statement, PrintStmt):
+            return any(self._expr_uses_yield(value) for value in statement.values) or (
+                statement.sep is not None and self._expr_uses_yield(statement.sep)
+            ) or (
+                statement.end is not None and self._expr_uses_yield(statement.end)
+            )
+        if isinstance(statement, ExprStmt):
+            return self._expr_uses_yield(statement.expr)
+        if isinstance(statement, ReturnStmt):
+            return statement.value is not None and self._expr_uses_yield(statement.value)
+        if isinstance(statement, IfStmt):
+            return self._expr_uses_yield(statement.condition) or any(
+                self._statement_uses_yield(child) for child in statement.body + statement.orelse
+            )
+        if isinstance(statement, WhileStmt):
+            return self._expr_uses_yield(statement.condition) or any(
+                self._statement_uses_yield(child) for child in statement.body + statement.orelse
+            )
+        if isinstance(statement, ForStmt):
+            return self._expr_uses_yield(statement.iterator) or any(
+                self._statement_uses_yield(child) for child in statement.body + statement.orelse
+            )
+        if isinstance(statement, RaiseStmt):
+            return (
+                statement.value is not None and self._expr_uses_yield(statement.value)
+            ) or (
+                statement.cause is not None and self._expr_uses_yield(statement.cause)
+            )
+        if isinstance(statement, TryStmt):
+            return any(self._statement_uses_yield(child) for child in statement.body + statement.orelse + statement.finalbody) or any(
+                self._statement_uses_yield(child)
+                for handler in statement.handlers
+                for child in handler.body
+            )
+        if isinstance(statement, WithStmt):
+            return self._expr_uses_yield(statement.context_expr) or any(
+                self._statement_uses_yield(child) for child in statement.body
+            )
+        return False
+
+    def _expr_uses_yield(self, expr) -> bool:
+        if isinstance(expr, YieldExpr):
+            return True
+        if isinstance(expr, BinaryExpr):
+            return self._expr_uses_yield(expr.left) or self._expr_uses_yield(expr.right)
+        if isinstance(expr, UnaryExpr):
+            return self._expr_uses_yield(expr.operand)
+        if isinstance(expr, CompareExpr):
+            return self._expr_uses_yield(expr.left) or self._expr_uses_yield(expr.right)
+        if isinstance(expr, CompareChainExpr):
+            return any(self._expr_uses_yield(operand) for operand in expr.operands)
+        if isinstance(expr, BoolOpExpr):
+            return self._expr_uses_yield(expr.left) or self._expr_uses_yield(expr.right)
+        if isinstance(expr, IfExpr):
+            return any(
+                self._expr_uses_yield(part)
+                for part in (expr.condition, expr.body, expr.orelse)
+            )
+        if isinstance(expr, LambdaExpr):
+            return False
+        if isinstance(expr, CallExpr):
+            return any(self._expr_uses_yield(arg.value) if isinstance(arg, StarredExpr) else self._expr_uses_yield(arg) for arg in expr.args) or any(
+                self._expr_uses_yield(arg) for arg in expr.kwargs.values()
+            ) or any(self._expr_uses_yield(part.value) for part in getattr(expr, "kw_starred", []))
+        if isinstance(expr, CallValueExpr):
+            return self._expr_uses_yield(expr.callee) or any(
+                self._expr_uses_yield(arg.value) if isinstance(arg, StarredExpr) else self._expr_uses_yield(arg)
+                for arg in expr.args
+            ) or any(self._expr_uses_yield(arg) for arg in expr.kwargs.values()) or any(
+                self._expr_uses_yield(part.value) for part in getattr(expr, "kw_starred", [])
+            )
+        if isinstance(expr, AttributeExpr):
+            return self._expr_uses_yield(expr.object)
+        if isinstance(expr, MethodCallExpr):
+            return self._expr_uses_yield(expr.object) or any(self._expr_uses_yield(arg) for arg in expr.args) or any(
+                self._expr_uses_yield(arg) for arg in expr.kwargs.values()
+            ) or any(self._expr_uses_yield(part.value) for part in getattr(expr, "kw_starred", []))
+        if isinstance(expr, ListExpr):
+            return any(self._expr_uses_yield(element) for element in expr.elements)
+        if isinstance(expr, TupleExpr):
+            return any(self._expr_uses_yield(element) for element in expr.elements)
+        if isinstance(expr, DictExpr):
+            return any(self._expr_uses_yield(key) for key in expr.keys) or any(
+                self._expr_uses_yield(value) for value in expr.values
+            )
+        if isinstance(expr, SetExpr):
+            return any(self._expr_uses_yield(element) for element in expr.elements)
+        if isinstance(expr, ListCompExpr):
+            return self._expr_uses_yield(expr.element) or any(
+                self._expr_uses_yield(generator.iterator) or any(self._expr_uses_yield(cond) for cond in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, SetCompExpr):
+            return self._expr_uses_yield(expr.element) or any(
+                self._expr_uses_yield(generator.iterator) or any(self._expr_uses_yield(cond) for cond in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, DictCompExpr):
+            return self._expr_uses_yield(expr.key) or self._expr_uses_yield(expr.value) or any(
+                self._expr_uses_yield(generator.iterator) or any(self._expr_uses_yield(cond) for cond in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, IndexExpr):
+            return self._expr_uses_yield(expr.collection) or self._expr_uses_yield(expr.index)
+        if isinstance(expr, SliceExpr):
+            return any(
+                part is not None and self._expr_uses_yield(part)
+                for part in (expr.lower, expr.upper, expr.step)
+            )
+        if isinstance(expr, NamedExpr):
+            return self._expr_uses_yield(expr.value)
+        if isinstance(expr, StarredExpr):
+            return self._expr_uses_yield(expr.value)
+        if isinstance(expr, KwStarredExpr):
+            return self._expr_uses_yield(expr.value)
+        return False
 
     def _emit_comprehension(
         self,

@@ -359,6 +359,16 @@ SOURCE_TESTS = [
         "source": """try:\n    print("body")\nexcept Exception:\n    print("except")\nelse:\n    print("else")\n\ntry:\n    try:\n        raise ValueError("boom")\n    except ValueError:\n        raise\nexcept Exception as err:\n    print(err)\n""",
         "expected": ["body", "else", "boom"],
     },
+    {
+        "name": "Generators with next and StopIteration",
+        "source": """def gen():\n    yield 1\n    x = yield 2\n    print(x is None)\n    yield 3\n\ng = gen()\nprint(next(g))\nprint(next(g))\nprint(next(g))\ntry:\n    next(g)\nexcept StopIteration:\n    print("done")\n""",
+        "expected": ["1", "2", "True", "3", "done"],
+    },
+    {
+        "name": "Generators in for loops",
+        "source": """def count(n):\n    i = 0\n    while i < n:\n        yield i\n        i = i + 1\n\nfor value in count(3):\n    print(value)\n""",
+        "expected": ["0", "1", "2"],
+    },
 ]
 
 # Backward-compatible alias used by parser equivalence tests
@@ -445,6 +455,12 @@ NEGATIVE_TESTS = [
         "name": "Reject bare raise outside except",
         "source": "raise\n",
         "expected_substring": "bare raise is only valid inside an except block",
+    },
+    {
+        "name": "Reject generators in native codegen",
+        "source": "def gen():\n    yield 1\nprint(next(gen()))\n",
+        "native": True,
+        "expected_substring": "native compilation does not support generators or yield yet",
     },
     {
         "name": "Reject negative exponent in native codegen",

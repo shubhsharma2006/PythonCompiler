@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
 from dataclasses import dataclass
 import copy
 import os
@@ -23,6 +24,7 @@ from compiler.core.ast import (
     FunctionDef,
     GlobalStmt,
     IfStmt,
+    IfExpr,
     ImportStmt,
     IndexExpr,
     ListCompExpr,
@@ -42,6 +44,7 @@ from compiler.core.ast import (
     SliceExpr,
     UnpackAssignStmt,
     WithStmt,
+    YieldExpr,
     AssignStmt,
     ExprStmt,
 )
@@ -253,6 +256,28 @@ def _program_uses_negative_int_exponent(program: Program) -> bool:
         return False
 
     return walk(program.body)
+
+
+def _normalize_program_for_frontend_compare(node):
+    if is_dataclass(node):
+        kwargs = {}
+        for field in fields(node):
+            if not field.init:
+                continue
+            value = getattr(node, field.name)
+            if field.name == "span":
+                kwargs[field.name] = type(value)()
+            elif isinstance(value, list):
+                kwargs[field.name] = [_normalize_program_for_frontend_compare(item) for item in value]
+            elif isinstance(value, dict):
+                kwargs[field.name] = {
+                    key: _normalize_program_for_frontend_compare(item)
+                    for key, item in value.items()
+                }
+            else:
+                kwargs[field.name] = _normalize_program_for_frontend_compare(value)
+        return type(node)(**kwargs)
+    return node
 
 
 def _program_uses_mixed_numeric_ops(program: Program) -> bool:
@@ -858,6 +883,116 @@ def _expr_uses_slicing(expr) -> bool:
     return False
 
 
+def _expr_uses_generators(expr) -> bool:
+    if isinstance(expr, YieldExpr):
+        return True
+    if isinstance(expr, SliceExpr):
+        return any(
+            part is not None and _expr_uses_generators(part)
+            for part in (expr.lower, expr.upper, expr.step)
+        )
+    if isinstance(expr, IndexExpr):
+        return _expr_uses_generators(expr.collection) or _expr_uses_generators(expr.index)
+    if isinstance(expr, CallExpr):
+        return any(_expr_uses_generators(arg) for arg in expr.args) or any(_expr_uses_generators(arg) for arg in expr.kwargs.values())
+    if isinstance(expr, CallValueExpr):
+        return _expr_uses_generators(expr.callee) or any(_expr_uses_generators(arg) for arg in expr.args) or any(
+            _expr_uses_generators(arg) for arg in expr.kwargs.values()
+        )
+    if isinstance(expr, MethodCallExpr):
+        return (
+            _expr_uses_generators(expr.object)
+            or any(_expr_uses_generators(arg) for arg in expr.args)
+            or any(_expr_uses_generators(arg) for arg in expr.kwargs.values())
+        )
+    if isinstance(expr, BinaryExpr):
+        return _expr_uses_generators(expr.left) or _expr_uses_generators(expr.right)
+    if isinstance(expr, CompareExpr):
+        return _expr_uses_generators(expr.left) or _expr_uses_generators(expr.right)
+    if isinstance(expr, CompareChainExpr):
+        return any(_expr_uses_generators(operand) for operand in expr.operands)
+    if isinstance(expr, BoolOpExpr):
+        return _expr_uses_generators(expr.left) or _expr_uses_generators(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return _expr_uses_generators(expr.operand)
+    if isinstance(expr, IfExpr):
+        return any(_expr_uses_generators(part) for part in (expr.condition, expr.body, expr.orelse))
+    if isinstance(expr, ListExpr):
+        return any(_expr_uses_generators(element) for element in expr.elements)
+    if isinstance(expr, TupleExpr):
+        return any(_expr_uses_generators(element) for element in expr.elements)
+    if isinstance(expr, DictExpr):
+        return any(_expr_uses_generators(key) for key in expr.keys) or any(_expr_uses_generators(value) for value in expr.values)
+    if isinstance(expr, SetExpr):
+        return any(_expr_uses_generators(element) for element in expr.elements)
+    if isinstance(expr, AttributeExpr):
+        return _expr_uses_generators(expr.object)
+    if isinstance(expr, ListCompExpr):
+        return _expr_uses_generators(expr.element) or any(
+            _expr_uses_generators(generator.iterator) or any(_expr_uses_generators(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, SetCompExpr):
+        return _expr_uses_generators(expr.element) or any(
+            _expr_uses_generators(generator.iterator) or any(_expr_uses_generators(condition) for condition in generator.ifs)
+            for generator in expr.generators
+        )
+    if isinstance(expr, DictCompExpr):
+        return (
+            _expr_uses_generators(expr.key)
+            or _expr_uses_generators(expr.value)
+            or any(
+                _expr_uses_generators(generator.iterator) or any(_expr_uses_generators(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        )
+    return False
+
+
+def _program_uses_generators(program: Program) -> bool:
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, FunctionDef):
+                if any(_expr_uses_generators(default) for default in statement.defaults):
+                    return True
+                if walk(statement.body):
+                    return True
+            elif isinstance(statement, ClassDef):
+                for attribute in statement.attributes:
+                    if _expr_uses_generators(attribute.value):
+                        return True
+                for method in statement.methods:
+                    if any(_expr_uses_generators(default) for default in method.defaults):
+                        return True
+                    if walk(method.body):
+                        return True
+            elif isinstance(statement, IfStmt):
+                if _expr_uses_generators(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, WhileStmt):
+                if _expr_uses_generators(statement.condition) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, ForStmt):
+                if _expr_uses_generators(statement.iterator) or walk(statement.body) or walk(statement.orelse):
+                    return True
+            elif isinstance(statement, TryStmt):
+                if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers) or walk(statement.orelse) or walk(statement.finalbody):
+                    return True
+            elif isinstance(statement, WithStmt):
+                if _expr_uses_generators(statement.context_expr) or walk(statement.body):
+                    return True
+            else:
+                value = getattr(statement, "value", None)
+                expr = getattr(statement, "expr", None)
+                if value is not None and _expr_uses_generators(value):
+                    return True
+                if expr is not None and _expr_uses_generators(expr):
+                    return True
+        return False
+
+    return walk(program.body)
+
+
 def _program_uses_core_vm_only_features(program: Program) -> bool:
     def walk(statements: list[object]) -> bool:
         for statement in statements:
@@ -1137,9 +1272,36 @@ def _analyze_source(
 
     parsed = None
     if frontend == "owned":
-        program = parse_to_program(lexed, errors)
-        if program is None or errors.has_errors():
-            return CompilationResult(success=False, errors=errors, lexed=lexed, program=program)
+        owned_errors = ErrorHandler(source=source, filename=filename)
+        owned_program = parse_to_program(lexed, owned_errors)
+
+        cpython_errors = ErrorHandler(source=source, filename=filename)
+        parsed = parse_tokens(lexed, cpython_errors)
+        cpython_program = None
+        if parsed is not None and not cpython_errors.has_errors():
+            cpython_program = lower_cst(parsed, cpython_errors)
+
+        owned_ok = owned_program is not None and not owned_errors.has_errors()
+        cpython_ok = cpython_program is not None and not cpython_errors.has_errors()
+
+        if owned_ok and cpython_ok:
+            if _normalize_program_for_frontend_compare(owned_program) == _normalize_program_for_frontend_compare(cpython_program):
+                program = owned_program
+            else:
+                program = cpython_program
+        elif cpython_ok:
+            program = cpython_program
+        elif owned_ok:
+            program = owned_program
+        else:
+            chosen_errors = cpython_errors if parsed is None or cpython_errors.has_errors() else owned_errors
+            return CompilationResult(
+                success=False,
+                errors=chosen_errors,
+                lexed=lexed,
+                parsed=parsed,
+                program=cpython_program if cpython_program is not None else owned_program,
+            )
     else:
         parsed = parse_tokens(lexed, errors)
         if parsed is None or errors.has_errors():
@@ -1172,7 +1334,7 @@ def check_source(
     source: str,
     *,
     filename: str = "<stdin>",
-    frontend: str = "cpython",
+    frontend: str = "owned",
 ) -> CompilationResult:
     return _analyze_source(source, filename=filename, frontend=frontend)
 
@@ -1224,6 +1386,10 @@ def compile_source(
         return result
     if _program_uses_exceptions(result.program):
         result.errors.error("Codegen", "native compilation does not support exceptions yet")
+        result.success = False
+        return result
+    if _program_uses_generators(result.program):
+        result.errors.error("Codegen", "native compilation does not support generators or yield yet")
         result.success = False
         return result
     if _program_uses_core_vm_only_features(result.program):

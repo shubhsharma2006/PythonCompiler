@@ -50,6 +50,7 @@ from compiler.core.ast import (
     UnpackAssignStmt,
     WhileStmt,
     WithStmt,
+    YieldExpr,
 )
 from compiler.core.signature import bind_call_arguments
 from compiler.core.types import FunctionType, ValueType
@@ -197,7 +198,7 @@ class NameResolver:
             return
 
         if isinstance(statement, ExprStmt):
-            if not isinstance(statement.expr, (CallExpr, CallValueExpr, MethodCallExpr)):
+            if not isinstance(statement.expr, (CallExpr, CallValueExpr, MethodCallExpr, YieldExpr)):
                 self._error(statement, "only function and method calls may be used as standalone expressions")
             self._resolve_expr(statement.expr, scope)
             return
@@ -473,6 +474,13 @@ class NameResolver:
                     node=expr.func_def,
                 )
             )
+            return
+
+        if isinstance(expr, YieldExpr):
+            if self.current_function is None:
+                self._error(expr, "yield is only valid inside a function")
+            if expr.value is not None:
+                self._resolve_expr(expr.value, scope)
             return
 
         if isinstance(expr, IndexExpr):

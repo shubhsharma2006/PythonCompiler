@@ -58,6 +58,24 @@ class CLITests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("File not found", result.stderr)
 
+    def test_check_mode_defaults_to_owned_frontend(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, dir=".") as handle:
+            handle.write("print(7)\n")
+            path = handle.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, "main.py", path, "--check", "--no-viz", "-q"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
 
 if __name__ == "__main__":
     unittest.main()

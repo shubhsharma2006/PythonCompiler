@@ -16,3 +16,9 @@ class RaisedSignal(Exception):
         super().__init__()
         self.value = value
         self.cause = cause
+
+
+class YieldSignal(Exception):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value

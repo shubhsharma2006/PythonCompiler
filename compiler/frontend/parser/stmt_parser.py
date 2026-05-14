@@ -31,6 +31,18 @@ class StmtParser:
     def parse_module(self) -> Program:
         self.cursor.skip_noise()
         body = self._parse_body(allow_docstring=True, top_level=True)
+        if body:
+            span = body[0].span
+            end = body[-1].span
+            return Program(
+                span=type(span)(
+                    line=span.line,
+                    column=span.column,
+                    end_line=end.end_line,
+                    end_column=end.end_column,
+                ),
+                body=body,
+            )
         return Program(span=self.cursor.current_span(), body=body)
 
     # ── Block / body parsing ────────────────────────────────────────

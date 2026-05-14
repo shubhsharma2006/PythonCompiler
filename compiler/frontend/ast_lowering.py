@@ -56,6 +56,7 @@ from compiler.core.ast import (
     WithStmt,
     BreakStmt,
     ContinueStmt,
+    YieldExpr,
 )
 from compiler.frontend.cst import ParsedModule
 from compiler.utils.error_handler import ErrorHandler
@@ -431,6 +432,8 @@ class PythonSubsetLowerer:
 
     def _lower_expr(self, node: ast.expr):
         if isinstance(node, ast.Constant):
+            if node.value is None:
+                return ConstantExpr(span=self._span(node), value=None)
             if isinstance(node.value, bool):
                 return ConstantExpr(span=self._span(node), value=node.value)
             if isinstance(node.value, int):
@@ -687,6 +690,16 @@ class PythonSubsetLowerer:
                 kwarg=node.args.kwarg.arg if node.args.kwarg is not None else None,
             )
             return LambdaExpr(span=self._span(node), func_def=func_def)
+
+        if isinstance(node, ast.Yield):
+            value = self._lower_expr(node.value) if node.value is not None else None
+            if node.value is not None and value is None:
+                return None
+            return YieldExpr(span=self._span(node), value=value)
+
+        if isinstance(node, ast.YieldFrom):
+            self._unsupported(node, "yield from is not supported yet")
+            return None
 
         self._unsupported(node, f"expression {type(node).__name__} is not supported")
         return None
