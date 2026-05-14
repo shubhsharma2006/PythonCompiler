@@ -439,7 +439,7 @@ NEGATIVE_TESTS = [
     {
         "name": "Reject invalid with-as target",
         "source": "class CM:\n    def __enter__(self):\n        return 1\n    def __exit__(self, exc_type, exc, tb):\n        pass\nwith CM() as (a, b):\n    print(1)\n",
-        "expected_substring": "Syntax Error",
+        "expected_substring": "only simple name targets in with-as clauses are supported",
     },
     {
         "name": "Reject bare raise outside except",

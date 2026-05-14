@@ -10,25 +10,25 @@ extern "C" {
 
 /* Runtime type ids (extend as needed) */
 enum {
-	PY_TYPE_UNKNOWN = 0,
-	PY_TYPE_STR = 1,
-	PY_TYPE_LIST = 2,
-	PY_TYPE_DICT = 3,
-	PY_TYPE_SET = 4,
-	PY_TYPE_TUPLE = 5,
-	PY_TYPE_OBJECT = 6,
-	PY_TYPE_FUNCTION = 7,
+    PY_TYPE_UNKNOWN = 0,
+    PY_TYPE_STR = 1,
+    PY_TYPE_LIST = 2,
+    PY_TYPE_DICT = 3,
+    PY_TYPE_SET = 4,
+    PY_TYPE_TUPLE = 5,
+    PY_TYPE_OBJECT = 6,
+    PY_TYPE_FUNCTION = 7,
 };
 
 /* GC/ownership header */
 typedef struct PyObjectHeader {
-	int refcount;
-	int type_id;
-	uint32_t flags;
-	struct PyObjectHeader *gc_next;
-	struct PyObjectHeader *gc_prev;
-	const char *alloc_file;
-	int alloc_line;
+    int refcount;
+    int type_id;
+    uint32_t flags;
+    struct PyObjectHeader *gc_next;
+    struct PyObjectHeader *gc_prev;
+    const char *alloc_file;
+    int alloc_line;
 } PyObjectHeader;
 
 /* Reference-counted allocation helpers */

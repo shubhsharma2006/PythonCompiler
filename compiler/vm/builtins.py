@@ -60,10 +60,17 @@ def builtin_range(*args):
     return range(*normalized)
 
 
-def builtin_len(host: BuiltinHost, *args):
-    if len(args) != 1:
+def builtin_len(host_or_value, *args):
+    if hasattr(host_or_value, "invoke_builtin_callable"):
+        host = host_or_value
+        values = args
+    else:
+        host = None
+        values = (host_or_value, *args)
+
+    if len(values) != 1:
         raise VMError("len() expects exactly 1 argument")
-    value = unwrap_runtime_value(args[0])
+    value = unwrap_runtime_value(values[0])
     if isinstance(value, (list, tuple, str, dict, set)):
         return len(value)
 
@@ -74,6 +81,8 @@ def builtin_len(host: BuiltinHost, *args):
         method = None
 
     if method is not None:
+        if host is None:
+            raise VMError("len() on VM objects requires a runtime host")
         result = host.invoke_builtin_callable(method)
         result = unwrap_runtime_value(result)
         if not isinstance(result, int) or isinstance(result, bool):

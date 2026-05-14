@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-viz", action="store_true", help="Accepted for compatibility; does nothing")
     parser.add_argument("-q", "--quiet", action="store_true", help="Reduce CLI output")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable additional compiler logs")
-    parser.add_argument("--frontend", choices=["cpython", "owned"], default="owned", help="Parser frontend to use (default: owned)")
+    parser.add_argument("--frontend", choices=["cpython", "owned"], default="cpython", help="Parser frontend to use (default: cpython)")
     return parser
 
 
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.stage(mode.title())
     if mode == "check":
-        result = check_source(source, filename=filename)
+        result = check_source(source, filename=filename, frontend=args.frontend)
     elif mode == "compile-native":
         result = compile_source(source, filename=filename, output=args.output, run=False, frontend=args.frontend)
     elif mode == "run-native":

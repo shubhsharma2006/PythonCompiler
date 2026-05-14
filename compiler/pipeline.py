@@ -1128,7 +1128,7 @@ def _analyze_source(
     source: str,
     *,
     filename: str = "<stdin>",
-    frontend: str = "owned",
+    frontend: str = "cpython",
 ) -> CompilationResult:
     errors = ErrorHandler(source=source, filename=filename)
     lexed = lex_source(source, filename, errors)
@@ -1172,15 +1172,16 @@ def check_source(
     source: str,
     *,
     filename: str = "<stdin>",
+    frontend: str = "cpython",
 ) -> CompilationResult:
-    return _analyze_source(source, filename=filename)
+    return _analyze_source(source, filename=filename, frontend=frontend)
 
 
 def execute_source(
     source: str,
     *,
     filename: str = "<stdin>",
-    frontend: str = "owned",
+    frontend: str = "cpython",
 ) -> CompilationResult:
     result = _analyze_source(source, filename=filename, frontend=frontend)
     if not result.success or result.program is None:
@@ -1208,7 +1209,7 @@ def compile_source(
     filename: str = "<stdin>",
     output: str = "output.c",
     run: bool = False,
-    frontend: str = "owned",
+    frontend: str = "cpython",
 ) -> CompilationResult:
     result = _analyze_source(source, filename=filename, frontend=frontend)
     if not result.success or result.program is None or result.semantic is None:
