@@ -574,7 +574,7 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("native compilation does not support nested functions yet", result.errors.render())
 
-    def test_compile_source_rejects_exceptions_for_native_path(self):
+    def test_compile_source_allows_basic_try_except_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = os.path.join(temp_dir, "program.c")
             result = compile_source(
@@ -585,8 +585,20 @@ class PipelineTests(unittest.TestCase):
                 filename="inline.py",
                 output=output_path,
             )
-        self.assertFalse(result.success)
-        self.assertIn("native compilation does not support exceptions yet", result.errors.render())
+        self.assertTrue(result.success, result.errors.render())
+
+    def test_compile_source_allows_typed_except_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "try:\n"
+                "    raise \"boom\"\n"
+                "except Exception as err:\n"
+                "    print(err)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertTrue(result.success, result.errors.render())
 
     def test_compile_source_rejects_default_and_keyword_arguments_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:

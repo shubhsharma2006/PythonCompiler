@@ -16,7 +16,9 @@ from compiler.core.ast import (
     LambdaExpr,
     PrintStmt,
     Program,
+    RaiseStmt,
     ReturnStmt,
+    TryStmt,
     UnaryExpr,
     WhileStmt,
     BreakStmt,
@@ -49,6 +51,7 @@ class CFGLowering:
         self.current_function: CFGFunction | None = None
         self.current_block: BasicBlock | None = None
         self.loop_stack: list[tuple[str, str]] = []
+        self.exception_target_stack: list[str] = []
 
     def generate(self, program: Program) -> CFGModule:
         main_function = self._new_function("main", [], ValueType.INT)
@@ -331,6 +334,82 @@ class CFGLowering:
         if isinstance(statement, ReturnStmt):
             value_name = None if statement.value is None else self._emit_expr(statement.value)[0]
             self._terminate(ReturnTerminator(value_name))
+            return
+
+        if isinstance(statement, RaiseStmt):
+            error_type = self._new_temp(ValueType.STRING)
+            self._emit(LoadConst(error_type, "Exception", ValueType.STRING))
+            if statement.value is None:
+                error_msg = self._new_temp(ValueType.STRING)
+                self._emit(LoadConst(error_msg, "", ValueType.STRING))
+            else:
+                error_msg, _ = self._emit_expr(statement.value)
+            self._emit(Call(None, "py_set_error", [error_type, error_msg], ValueType.VOID))
+
+            if self.exception_target_stack:
+                self._terminate(JumpTerminator(self.exception_target_stack[-1]))
+            else:
+                self._terminate(ReturnTerminator(None))
+            return
+
+        if isinstance(statement, TryStmt):
+            handler_block = self._new_block("except")
+            merge_block = self._new_block("try_merge")
+            outer_target = self.exception_target_stack[-1] if self.exception_target_stack else None
+
+            self.exception_target_stack.append(handler_block.name)
+            for child in statement.body:
+                self._emit_statement(child)
+            if self.current_block.terminator is None:
+                self._terminate(JumpTerminator(merge_block.name))
+            self.exception_target_stack.pop()
+
+            dispatch_block = handler_block
+            next_dispatch = None
+
+            for handler in statement.handlers:
+                handler_body = self._new_block("except_handler")
+                self._switch_to(dispatch_block)
+
+                if handler.type_name is None:
+                    self._terminate(JumpTerminator(handler_body.name))
+                    next_dispatch = None
+                else:
+                    type_temp = self._new_temp(ValueType.STRING)
+                    self._emit(LoadConst(type_temp, handler.type_name, ValueType.STRING))
+                    match_temp = self._new_temp(ValueType.BOOL)
+                    self._emit(Call(match_temp, "py_error_matches", [type_temp], ValueType.BOOL))
+                    next_dispatch = self._new_block("except_next")
+                    self._terminate(BranchTerminator(match_temp, handler_body.name, next_dispatch.name))
+
+                self._switch_to(handler_body)
+                if handler.name:
+                    if handler.name not in self.current_function.locals:
+                        self.current_function.locals[handler.name] = ValueType.STRING
+                    msg_temp = self._new_temp(ValueType.STRING)
+                    self._emit(Call(msg_temp, "py_error_message", [], ValueType.STRING))
+                    self._emit(Assign(handler.name, msg_temp))
+                self._emit(Call(None, "py_clear_error", [], ValueType.VOID))
+                for child in handler.body:
+                    self._emit_statement(child)
+                if self.current_block.terminator is None:
+                    self._terminate(JumpTerminator(merge_block.name))
+
+                if next_dispatch is None:
+                    dispatch_block = None
+                    break
+                dispatch_block = next_dispatch
+
+            if dispatch_block is not None:
+                self._switch_to(dispatch_block)
+                if self.current_block.terminator is None:
+                    if outer_target:
+                        self._terminate(JumpTerminator(outer_target))
+                    else:
+                        self._terminate(ReturnTerminator(None))
+
+            self._switch_to(merge_block)
+            return
 
     def _emit_expr(self, expr, discard_result: bool = False) -> tuple[str, ValueType]:
         if isinstance(expr, IfExpr):
@@ -401,7 +480,8 @@ class CFGLowering:
             args = [self._emit_expr(arg)[0] for arg in expr.args]
             value_type = self._runtime_type(expr)
             target = None if discard_result or value_type == ValueType.VOID else self._new_temp(value_type)
-            self._emit(Call(target, expr.func_name, args, value_type, can_raise=True, exception_target="cleanup"))
+            exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+            self._emit(Call(target, expr.func_name, args, value_type, can_raise=True, exception_target=exception_target))
             return target or "0", value_type
 
         return "0", ValueType.INT

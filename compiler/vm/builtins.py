@@ -3,7 +3,7 @@ from __future__ import annotations
 import builtins as py_builtins
 from typing import Protocol
 
-from compiler.vm.errors import VMError
+from compiler.vm.errors import RaisedSignal, VMError
 from compiler.vm.objects import ClassObject, InstanceObject, class_is_subclass, unwrap_runtime_value, py_load_attr
 
 
@@ -116,6 +116,19 @@ def builtin_sorted(host: BuiltinHost, iterable, *, key=None, reverse=False):
         raise VMError(str(exc)) from None
 
 
+_NEXT_MISSING = object()
+
+
+def builtin_next(iterator, default=_NEXT_MISSING):
+    iterator = unwrap_runtime_value(iterator)
+    try:
+        return next(iterator)
+    except StopIteration as exc:
+        if default is not _NEXT_MISSING:
+            return unwrap_runtime_value(default)
+        raise RaisedSignal(exc) from None
+
+
 def build_builtins(host: BuiltinHost) -> dict[str, object]:
     return {
         "print": lambda *args, sep=" ", end="\n", file=None, flush=False: builtin_print(
@@ -153,7 +166,7 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
             host, iterable, key=key, reverse=reverse
         ),
         "iter": iter,
-        "next": next,
+    "next": builtin_next,
         "abs": abs,
         "round": round,
         "min": min,

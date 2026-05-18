@@ -51,7 +51,18 @@ void py_register_type(int type_id, const char *name, py_destroy_fn destroy, py_v
 void py_visit_children(void *obj, void (*visit)(void *child, void *ctx), void *ctx);
 
 /* Exception state (scaffolding) */
+typedef struct {
+	int active;
+	const char *type;
+	const char *message;
+} PyErrorState;
+
 int py_error_occurred(void);
+void py_set_error(const char *type, const char *message);
+void py_clear_error(void);
+const char *py_error_type(void);
+const char *py_error_message(void);
+int py_error_matches(const char *type);
 
 /* Print with newline */
 void py_print_int(int value);

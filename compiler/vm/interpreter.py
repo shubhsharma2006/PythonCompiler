@@ -6,7 +6,7 @@ from typing import Callable
 
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule
 from compiler.vm.builtins import build_builtins
-from compiler.vm.errors import RaisedSignal, ReturnSignal, VMError
+from compiler.vm.errors import RaisedSignal, ReturnSignal, VMError, YieldSignal
 from compiler.vm.objects import (
     ClassObject,
     Closure,
@@ -57,6 +57,32 @@ class Frame:
     def is_module(self) -> bool:
         return self.function.name == "<module>"
 
+
+_GENERATOR_MISSING = object()
+
+
+class GeneratorObject:
+    def __init__(self, interpreter: "BytecodeInterpreter", frame: Frame) -> None:
+        self._interpreter = interpreter
+        self._frame = frame
+        self._finished = False
+        self._resume_value = _GENERATOR_MISSING
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self.send(None)
+
+    def send(self, value):
+        if self._finished:
+            raise StopIteration
+        self._resume_value = value
+        try:
+            return self._interpreter._resume_generator(self)
+        except StopIteration:
+            self._finished = True
+            raise
 
 class BytecodeInterpreter:
     def __init__(self, module_loader: Callable[[str, str], BytecodeModule] | None = None) -> None:
@@ -120,6 +146,9 @@ class BytecodeInterpreter:
 
         frame.locals.update(bound_args)
 
+        if function.is_generator:
+            return GeneratorObject(self, frame)
+
         try:
             while frame.ip < len(function.instructions):
                 self._current_frame = frame
@@ -143,6 +172,30 @@ class BytecodeInterpreter:
 
         return None
 
+    def _resume_generator(self, generator: GeneratorObject):
+        frame = generator._frame
+        while frame.ip < len(frame.function.instructions):
+            self._current_frame = frame
+
+            if generator._resume_value is not _GENERATOR_MISSING:
+                frame.stack.append(generator._resume_value)
+                generator._resume_value = _GENERATOR_MISSING
+
+            instruction = frame.function.instructions[frame.ip]
+            frame.ip += 1
+
+            try:
+                self._execute_instruction(frame, instruction)
+            except YieldSignal as signal:
+                return signal.value
+            except ReturnSignal:
+                raise StopIteration
+            except RaisedSignal as signal:
+                if not self._handle_exception(frame, signal):
+                    raise
+
+        raise StopIteration
+
     def _execute_instruction(self, frame: Frame, instruction) -> None:
         op = instruction.opcode
         arg = instruction.arg
@@ -150,6 +203,10 @@ class BytecodeInterpreter:
         if op == "LOAD_CONST":
             frame.stack.append(arg)
             return
+
+        if op == "YIELD_VALUE":
+            value = frame.stack.pop() if frame.stack else None
+            raise YieldSignal(value)
 
         if op == "LOAD_NAME":
             if arg in frame.locals:

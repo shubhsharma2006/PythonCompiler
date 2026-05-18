@@ -17,6 +17,7 @@ static PyObjectHeader *gc_tail = NULL;
 static size_t gc_live_count = 0;
 static size_t gc_total_allocs = 0;
 static size_t gc_total_frees = 0;
+static PyErrorState py_error_state = {0, NULL, NULL};
 
 static PyTypeInfo type_registry[256] = {
     [PY_TYPE_UNKNOWN] = {"unknown", NULL, NULL},
@@ -75,7 +76,10 @@ void gc_unregister(PyObjectHeader *header) {
 
 void *py_malloc_site(size_t size, int type_id, const char *file, int line) {
     PyObjectHeader *header = (PyObjectHeader *)malloc(sizeof(PyObjectHeader) + size);
-    if (!header) return NULL;
+    if (!header) {
+        py_set_error("MemoryError", "allocation failed");
+        return NULL;
+    }
     header->refcount = 1;
     header->type_id = type_id;
     header->flags = PY_GC_FLAG_LIVE;
@@ -152,7 +156,33 @@ void py_visit_children(void *obj, void (*visit)(void *child, void *ctx), void *c
 }
 
 int py_error_occurred(void) {
-    return 0;
+    return py_error_state.active != 0;
+}
+
+void py_set_error(const char *type, const char *message) {
+    py_error_state.active = 1;
+    py_error_state.type = type ? type : "Error";
+    py_error_state.message = message ? message : "";
+}
+
+void py_clear_error(void) {
+    py_error_state.active = 0;
+    py_error_state.type = NULL;
+    py_error_state.message = NULL;
+}
+
+const char *py_error_type(void) {
+    return py_error_state.type;
+}
+
+const char *py_error_message(void) {
+    return py_error_state.message;
+}
+
+int py_error_matches(const char *type) {
+    if (!py_error_state.active) return 0;
+    if (!type || !py_error_state.type) return 0;
+    return strcmp(py_error_state.type, type) == 0;
 }
 
 /* ----- existing runtime helpers ----- */
@@ -190,14 +220,18 @@ void py_write_bool(int value) {
 
 const char *py_int_to_str(int value) {
     char *buf = (char *)py_malloc(32, PY_TYPE_STR);
-    if (!buf) return "";
+    if (!buf) {
+        return "";
+    }
     snprintf(buf, 32, "%d", value);
     return buf;
 }
 
 const char *py_float_to_str(double value) {
     char *buf = (char *)py_malloc(64, PY_TYPE_STR);
-    if (!buf) return "";
+    if (!buf) {
+        return "";
+    }
     snprintf(buf, 64, "%g", value);
     return buf;
 }
@@ -216,7 +250,9 @@ const char *py_str_concat(const char *a, const char *b) {
     size_t la = strlen(sa);
     size_t lb = strlen(sb);
     char *result = (char *)py_malloc(la + lb + 1, PY_TYPE_STR);
-    if (!result) return "";
+    if (!result) {
+        return "";
+    }
     memcpy(result, sa, la);
     memcpy(result + la, sb, lb + 1);
     return result;
@@ -225,9 +261,8 @@ const char *py_str_concat(const char *a, const char *b) {
 int py_floor_div_int(int a, int b) {
     /* Python semantics: floor(a / b) for integers. */
     if (b == 0) {
-        /* Match Python's runtime error loosely; we abort for now. */
-        fprintf(stderr, "ZeroDivisionError: integer division or modulo by zero\n");
-        abort();
+        py_set_error("ZeroDivisionError", "integer division or modulo by zero");
+        return 0;
     }
     int q = a / b;
     int r = a % b;
@@ -241,8 +276,8 @@ int py_floor_div_int(int a, int b) {
 int py_pow_int(int base, int exp) {
     /* Python semantics for ints: exp < 0 yields float in Python; we don't support that in native mode. */
     if (exp < 0) {
-        fprintf(stderr, "ValueError: negative exponent not supported for int pow in native mode\n");
-        abort();
+        py_set_error("ValueError", "negative exponent not supported for int pow in native mode");
+        return 0;
     }
     int result = 1;
     int b = base;
@@ -262,8 +297,8 @@ int py_pow_int(int base, int exp) {
 int py_mod_int(int a, int b) {
     /* Python semantics: a % b has the sign of b and is defined via floor division. */
     if (b == 0) {
-        fprintf(stderr, "ZeroDivisionError: integer modulo by zero\n");
-        abort();
+        py_set_error("ZeroDivisionError", "integer modulo by zero");
+        return 0;
     }
     int q = py_floor_div_int(a, b);
     return a - q * b;

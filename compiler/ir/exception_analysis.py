@@ -11,6 +11,7 @@ from compiler.ir.cfg import (
     CFGModule,
     DecRef,
     LoadConst,
+    Print,
     UnaryOp,
 )
 from compiler.ir.ownership import OwnerKind
@@ -25,46 +26,40 @@ class ExceptionalLivenessAnalysis:
 
     def _apply_function(self, function: CFGFunction) -> None:
         rebuild_edges(function)
-        blocks = {block.name: block for block in function.blocks}
-        live_in: dict[str, set[str]] = {name: set() for name in blocks}
-        live_out: dict[str, set[str]] = {name: set() for name in blocks}
-
-        changed = True
-        while changed:
-            changed = False
-            for block in reversed(function.blocks):
-                out = set()
-                for succ in block.successors:
-                    out |= live_in.get(succ, set())
-                if out != live_out[block.name]:
-                    live_out[block.name] = out
-                    changed = True
-
-                current = set(out)
-                for instruction in reversed(block.instructions):
-                    defs = _instruction_defines(instruction)
-                    uses = _instruction_uses(instruction)
-                    current -= defs
-                    current |= uses
-                if current != live_in[block.name]:
-                    live_in[block.name] = current
-                    changed = True
-
         owned_refcounted = {
             name
             for name, info in function.ownership.items()
             if info.owner_kind == OwnerKind.OWNED and info.refcounted
         }
 
+        alive_in: dict[str, set[str]] = {block.name: set() for block in function.blocks}
+        alive_out: dict[str, set[str]] = {block.name: set() for block in function.blocks}
+
+        changed = True
+        while changed:
+            changed = False
+            for block in function.blocks:
+                incoming = set()
+                for pred in block.predecessors:
+                    incoming |= alive_out.get(pred, set())
+                if incoming != alive_in[block.name]:
+                    alive_in[block.name] = incoming
+                    changed = True
+
+                current = set(incoming)
+                for instruction in block.instructions:
+                    current = _update_alive_set(current, instruction, owned_refcounted)
+
+                if current != alive_out[block.name]:
+                    alive_out[block.name] = current
+                    changed = True
+
         for block in function.blocks:
-            current = set(live_out[block.name])
-            for instruction in reversed(block.instructions):
+            current = set(alive_in[block.name])
+            for instruction in block.instructions:
                 if isinstance(instruction, Call) and instruction.can_raise:
-                    instruction.exception_live = sorted(current & owned_refcounted)
-                defs = _instruction_defines(instruction)
-                uses = _instruction_uses(instruction)
-                current -= defs
-                current |= uses
+                    instruction.exception_live = sorted(current)
+                current = _update_alive_set(current, instruction, owned_refcounted)
 
 
 def _instruction_defines(instruction) -> set[str]:
@@ -86,6 +81,22 @@ def _instruction_uses(instruction) -> set[str]:
         return {instruction.operand}
     if isinstance(instruction, Call):
         return set(instruction.args)
+    if isinstance(instruction, Print):
+        return {instruction.value}
     if isinstance(instruction, DecRef):
         return {instruction.target}
     return set()
+
+
+def _update_alive_set(current: set[str], instruction, owned_refcounted: set[str]) -> set[str]:
+    next_alive = set(current)
+    if isinstance(instruction, DecRef):
+        if instruction.target in next_alive:
+            next_alive.remove(instruction.target)
+        return next_alive
+
+    defs = _instruction_defines(instruction)
+    for name in defs:
+        if name in owned_refcounted:
+            next_alive.add(name)
+    return next_alive

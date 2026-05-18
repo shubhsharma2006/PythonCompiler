@@ -102,6 +102,8 @@ class BasicBlock:
     terminator: Terminator | None = None
     predecessors: set[str] = field(default_factory=set)
     successors: set[str] = field(default_factory=set)
+    exceptional_predecessors: set[str] = field(default_factory=set)
+    exceptional_successors: set[str] = field(default_factory=set)
 
 
 @dataclass

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from compiler.ir.cfg import BranchTerminator, CFGFunction, JumpTerminator, ReturnTerminator
+from compiler.ir.cfg import BranchTerminator, Call, CFGFunction, JumpTerminator, ReturnTerminator
 
 
 def block_map(function: CFGFunction) -> dict[str, object]:
@@ -134,8 +134,15 @@ def rebuild_edges(function: CFGFunction) -> None:
     for block in function.blocks:
         block.predecessors.clear()
         block.successors.clear()
+        block.exceptional_predecessors.clear()
+        block.exceptional_successors.clear()
 
     for block in function.blocks:
+        for instruction in block.instructions:
+            if isinstance(instruction, Call) and instruction.can_raise and instruction.exception_target:
+                if instruction.exception_target in blocks:
+                    block.exceptional_successors.add(instruction.exception_target)
+                    blocks[instruction.exception_target].exceptional_predecessors.add(block.name)
         terminator = block.terminator
         if isinstance(terminator, JumpTerminator):
             block.successors.add(terminator.target)

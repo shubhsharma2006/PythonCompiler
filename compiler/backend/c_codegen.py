@@ -56,6 +56,7 @@ class CCodeGenerator:
 
     def _emit_main(self, function: IRFunction) -> list[str]:
         lines = ["int main(void) {"]
+        lines.append("    py_clear_error();")
 
         if function.return_type != ValueType.VOID:
             lines.append(
@@ -69,6 +70,7 @@ class CCodeGenerator:
 
     def _emit_function(self, function: IRFunction) -> list[str]:
         lines = [f"{self._prototype(function)} {{"]
+        lines.append("    py_clear_error();")
 
         if function.return_type != ValueType.VOID:
             lines.append(
@@ -168,6 +170,9 @@ class CCodeGenerator:
                             f"    {instruction.target} = "
                             f"py_str_concat({instruction.left}, {instruction.right});"
                         )
+                        lines.append(
+                            "    if (py_error_occurred()) goto cleanup;"
+                        )
 
                     else:
                         left = instruction.left
@@ -192,6 +197,9 @@ class CCodeGenerator:
                                 lines.append(
                                     f"    {instruction.target} = py_floor_div_int({left}, {right});"
                                 )
+                                lines.append(
+                                    "    if (py_error_occurred()) goto cleanup;"
+                                )
 
                         # Python exponentiation
                         elif op == "**":
@@ -203,6 +211,9 @@ class CCodeGenerator:
                                 lines.append(
                                     f"    {instruction.target} = py_pow_int({left}, {right});"
                                 )
+                                lines.append(
+                                    "    if (py_error_occurred()) goto cleanup;"
+                                )
 
                         # Python modulo
                         elif op == "%":
@@ -213,6 +224,9 @@ class CCodeGenerator:
                             else:
                                 lines.append(
                                     f"    {instruction.target} = py_mod_int({left}, {right});"
+                                )
+                                lines.append(
+                                    "    if (py_error_occurred()) goto cleanup;"
                                 )
 
                         # normal operators
@@ -325,6 +339,10 @@ class CCodeGenerator:
         if function.return_type == ValueType.VOID:
             lines.append("    return;")
         else:
+            default_value = self._default_initializer(function.return_type)
+            lines.append("    if (py_error_occurred()) {")
+            lines.append(f"        return {default_value};")
+            lines.append("    }")
             lines.append(f"    return {ret_var};")
         return lines
 

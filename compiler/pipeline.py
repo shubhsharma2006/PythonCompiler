@@ -155,6 +155,27 @@ def _program_uses_exceptions(program: Program) -> bool:
     return walk(program.body)
 
 
+def _program_uses_unsupported_exception_features(program: Program) -> bool:
+    def walk(statements: list[object]) -> bool:
+        for statement in statements:
+            if isinstance(statement, TryStmt):
+                if statement.orelse:
+                    return True
+                if walk(statement.body) or any(walk(handler.body) for handler in statement.handlers):
+                    return True
+            if isinstance(statement, FunctionDef) and walk(statement.body):
+                return True
+            if isinstance(statement, IfStmt) and (walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, WhileStmt) and (walk(statement.body) or walk(statement.orelse)):
+                return True
+            if isinstance(statement, ForStmt) and (walk(statement.body) or walk(statement.orelse)):
+                return True
+        return False
+
+    return walk(program.body)
+
+
 def _program_uses_for_loops(program: Program) -> bool:
     def walk(statements: list[object]) -> bool:
         for statement in statements:
@@ -1386,8 +1407,11 @@ def compile_source(
         result.errors.error("Codegen", "native compilation does not support nested functions yet")
         result.success = False
         return result
-    if _program_uses_exceptions(result.program):
-        result.errors.error("Codegen", "native compilation does not support exceptions yet")
+    if _program_uses_unsupported_exception_features(result.program):
+        result.errors.error(
+            "Codegen",
+            "native compilation only supports try/except or try/finally without else yet",
+        )
         result.success = False
         return result
     if _program_uses_generators(result.program):
@@ -1461,6 +1485,10 @@ def compile_source(
     ir_module = SSADestructor().lower(ssa_module)
     ir_module = OwnershipDecrefPlacement().apply(ir_module)
     ir_module = ExceptionalLivenessAnalysis().apply(ir_module)
+    from compiler.ir.exception_cleanup import ExceptionCleanupLowering
+    from compiler.ir.exception_cleanup_validation import ExceptionCleanupValidation
+    ir_module = ExceptionCleanupLowering().apply(ir_module)
+    ir_module = ExceptionCleanupValidation().apply(ir_module)
     runtime = CRuntimeSupport()
     c_code = CCodeGenerator().generate(ir_module)
     output_path = os.path.abspath(output)
