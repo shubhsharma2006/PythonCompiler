@@ -489,15 +489,20 @@ B = "\033[1m"
 R = "\033[0m"
 DM = "\033[2m"
 
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+TESTS_DIR = os.path.join(ROOT_DIR, "tests")
+
 
 def run_positive_test(test):
     with tempfile.TemporaryDirectory() as temp_dir:
         output_path = os.path.join(temp_dir, "program.c")
         executable_path = os.path.splitext(output_path)[0]
+        test_path = os.path.join(TESTS_DIR, test["file"])
         result = subprocess.run(
-            [sys.executable, "main.py", test["file"], "--run", "--no-viz", "-q", "-o", output_path],
+            [sys.executable, "main.py", test_path, "--run", "--no-viz", "-q", "-o", output_path],
             capture_output=True,
             text=True,
+            cwd=ROOT_DIR,
         )
         if result.returncode != 0:
             print(f"  {RD}✘ FAIL{R}  {test['name']} — compiler error")
@@ -521,7 +526,7 @@ def run_positive_test(test):
 
 
 def run_negative_test(test):
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, dir=".") as handle:
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, dir=ROOT_DIR) as handle:
         handle.write(test["source"])
         temp_path = handle.name
 
@@ -534,6 +539,7 @@ def run_negative_test(test):
             cmd,
             capture_output=True,
             text=True,
+            cwd=ROOT_DIR,
         )
         if result.returncode == 0:
             print(f"  {RD}✘ FAIL{R}  {test['name']} — expected compilation failure")
@@ -570,6 +576,7 @@ def run_source_test(test):
             [sys.executable, "main.py", temp_path, "--no-viz", "-q"],
             capture_output=True,
             text=True,
+            cwd=ROOT_DIR,
         )
         if result.returncode != 0:
             print(f"  {RD}✘ FAIL{R}  {test['name']} — runtime error")
@@ -590,10 +597,12 @@ def run_source_test(test):
 def run_cli_smoke():
     with tempfile.TemporaryDirectory() as temp_dir:
         output_path = os.path.join(temp_dir, "program.c")
+        test_path = os.path.join(TESTS_DIR, "test_input.py")
         result = subprocess.run(
-            [sys.executable, "main.py", "test_input.py", "--compile-native", "--no-viz", "-q", "-o", output_path],
+            [sys.executable, "main.py", test_path, "--compile-native", "--no-viz", "-q", "-o", output_path],
             capture_output=True,
             text=True,
+            cwd=ROOT_DIR,
         )
         if result.returncode != 0:
             print(f"  {RD}✘ FAIL{R}  CLI compile-only")
@@ -608,10 +617,12 @@ def run_cli_smoke():
 def run_quiet_mode_smoke():
     with tempfile.TemporaryDirectory() as temp_dir:
         output_path = os.path.join(temp_dir, "program.c")
+        test_path = os.path.join(TESTS_DIR, "test_input.py")
         result = subprocess.run(
-            [sys.executable, "main.py", "test_input.py", "--run", "--no-viz", "-q", "-o", output_path],
+            [sys.executable, "main.py", test_path, "--run", "--no-viz", "-q", "-o", output_path],
             capture_output=True,
             text=True,
+            cwd=ROOT_DIR,
         )
         if result.returncode != 0:
             print(f"  {RD}✘ FAIL{R}  CLI quiet mode")

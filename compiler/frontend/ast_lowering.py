@@ -195,7 +195,9 @@ class PythonSubsetLowerer:
                 optional_var = None
                 if item.optional_vars is not None:
                     if not isinstance(item.optional_vars, ast.Name):
-                        self._unsupported(item.optional_vars, "only simple name targets in with-as clauses are supported")
+                        span = self._span(item.optional_vars)
+                        self.errors.error("Syntax", "only simple name targets in with-as clauses are supported",
+                                          span.line, span.column, span.end_line, span.end_column)
                         return None
                     optional_var = item.optional_vars.id
                 body = [WithStmt(span=self._span(item), context_expr=context_expr, optional_var=optional_var, body=body)]
@@ -259,20 +261,18 @@ class PythonSubsetLowerer:
 
         if isinstance(node, ast.FunctionDef):
             if node.returns is not None:
-                self._unsupported(node, "function return annotations are not supported")
-                return None
+                # Warn but continue — annotation is ignored, function is kept
+                self._warn(node, "return type annotations are ignored by this compiler")
             if node.args.posonlyargs:
                 self._unsupported(node, "positional-only parameters are not supported")
                 return None
             if any(arg.annotation is not None for arg in node.args.args + node.args.kwonlyargs):
-                self._unsupported(node, "parameter annotations are not supported")
-                return None
+                # Warn but continue — parameter annotations are ignored
+                self._warn(node, "parameter annotations are ignored by this compiler")
             if node.args.vararg is not None and node.args.vararg.annotation is not None:
-                self._unsupported(node, "parameter annotations are not supported")
-                return None
+                self._warn(node, "parameter annotations are ignored by this compiler")
             if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
-                self._unsupported(node, "parameter annotations are not supported")
-                return None
+                self._warn(node, "parameter annotations are ignored by this compiler")
             defaults = [self._lower_expr(default) for default in node.args.defaults]
             if any(default is None for default in defaults):
                 return None
@@ -410,10 +410,15 @@ class PythonSubsetLowerer:
             for handler in node.handlers:
                 type_name = None
                 if handler.type is not None:
-                    if not isinstance(handler.type, ast.Name):
+                    if isinstance(handler.type, ast.Name):
+                        type_name = handler.type.id
+                    elif isinstance(handler.type, ast.Tuple):
+                        # except (TypeError, ValueError): — join names with comma
+                        names = [elt.id for elt in handler.type.elts if isinstance(elt, ast.Name)]
+                        type_name = ",".join(names)
+                    else:
                         self._unsupported(handler, "only named exception handlers are supported")
                         return None
-                    type_name = handler.type.id
                 lowered_body = self._lower_body(handler.body, allow_docstring=True) or []
                 handlers.append(ExceptHandler(span=self._span(handler), type_name=type_name, name=handler.name, body=lowered_body))
             body = self._lower_body(node.body, allow_docstring=True) or []
@@ -865,6 +870,10 @@ class PythonSubsetLowerer:
     def _unsupported(self, node: ast.AST, message: str) -> None:
         span = self._span(node)
         self.errors.error("Frontend", message, span.line, span.column, span.end_line, span.end_column)
+
+    def _warn(self, node: ast.AST, message: str) -> None:
+        span = self._span(node)
+        self.errors.warning("Frontend", message, span.line, span.column, span.end_line, span.end_column)
 
     @staticmethod
     def _span(node: ast.AST) -> SourceSpan:

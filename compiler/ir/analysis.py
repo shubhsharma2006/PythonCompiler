@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from compiler.ir.cfg import BranchTerminator, CFGFunction, JumpTerminator
+from compiler.ir.cfg import BranchTerminator, CFGFunction, JumpTerminator, ReturnTerminator
 
 
 def block_map(function: CFGFunction) -> dict[str, object]:
@@ -75,6 +75,58 @@ def compute_dominators(function: CFGFunction) -> dict[str, set[str]]:
                 changed = True
 
     return dominators
+
+
+def compute_post_dominators(function: CFGFunction) -> dict[str, set[str]]:
+    blocks = block_map(function)
+    rebuild_edges(function)
+    if not blocks:
+        return {}
+
+    exits = [block.name for block in function.blocks if isinstance(block.terminator, ReturnTerminator)]
+    if not exits:
+        exits = [function.entry_block]
+
+    all_blocks = set(blocks.keys())
+    postdominators: dict[str, set[str]] = {}
+    for name in blocks:
+        if name in exits:
+            postdominators[name] = {name}
+        else:
+            postdominators[name] = set(all_blocks)
+
+    changed = True
+    while changed:
+        changed = False
+        for name, block in blocks.items():
+            if name in exits:
+                continue
+            successors = block.successors
+            if not successors:
+                new_post = {name}
+            else:
+                succ_sets = [postdominators[s] for s in successors if s in postdominators]
+                new_post = set.intersection(*succ_sets) if succ_sets else set()
+                new_post.add(name)
+            if new_post != postdominators[name]:
+                postdominators[name] = new_post
+                changed = True
+
+    return postdominators
+
+
+def immediate_post_dominators(function: CFGFunction) -> dict[str, str | None]:
+    postdoms = compute_post_dominators(function)
+    idoms: dict[str, str | None] = {}
+    for block_name, doms in postdoms.items():
+        strict = doms - {block_name}
+        candidate = None
+        for dom in strict:
+            if all(dom == other or dom not in postdoms.get(other, set()) for other in strict):
+                candidate = dom
+                break
+        idoms[block_name] = candidate
+    return idoms
 
 
 def rebuild_edges(function: CFGFunction) -> None:

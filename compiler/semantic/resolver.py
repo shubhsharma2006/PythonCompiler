@@ -602,9 +602,15 @@ class NameResolver:
 
     def _resolve_handler(self, handler: ExceptHandler, scope: Scope) -> None:
         handler_scope = Scope(scope)
-        if handler.type_name is not None and handler_scope.lookup(handler.type_name) is None and not self._is_builtin_function(handler.type_name):
-            self._error(handler, f"undefined exception type {handler.type_name!r}")
+        if handler.type_name is not None:
+            # type_name may be a comma-joined tuple e.g. "TypeError,ValueError"
+            names = handler.type_name.split(",")
+            for name in names:
+                name = name.strip()
+                if name and handler_scope.lookup(name) is None and not self._is_builtin_function(name):
+                    self._error(handler, f"undefined exception type {name!r}")
         if handler.name is not None:
             handler_scope.define(handler.name, ValueType.UNKNOWN)
         for child in handler.body:
             self._resolve_statement(child, handler_scope)
+

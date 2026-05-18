@@ -6,6 +6,7 @@ from compiler.ir.cfg import (
     Call,
     CFGFunction,
     CFGModule,
+    DecRef,
     IRInstruction,
     JumpTerminator,
     LoadConst,
@@ -17,6 +18,8 @@ from compiler.ir.cfg import (
 from compiler.ir.analysis import compute_dominators, reachable_block_names, rebuild_edges, reverse_post_order
 from compiler.ir.lowering import CFGLowering
 from compiler.ir.passes import CFGConstantPropagation
+from compiler.ir.ownership import OwnerKind, SSAValueInfo, default_value_info
+from compiler.ir.ownership_pass import OwnershipDecrefPlacement
 from compiler.ir.ssa import (
     SSAConstantPropagation,
     SSACopyPropagation,
@@ -44,12 +47,17 @@ __all__ = [
     "Call",
     "CFGFunction",
     "CFGModule",
+    "DecRef",
     "CFGConstantPropagation",
     "CFGLowering",
     "IRFunction",
     "IRGenerator",
     "IRInstruction",
     "IRModule",
+    "OwnerKind",
+    "SSAValueInfo",
+    "default_value_info",
+    "OwnershipDecrefPlacement",
     "Phi",
     "JumpTerminator",
     "LoadConst",

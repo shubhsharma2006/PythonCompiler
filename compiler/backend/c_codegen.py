@@ -7,6 +7,7 @@ from compiler.ir import (
     BinaryOp,
     BranchTerminator,
     Call,
+    DecRef,
     IRFunction,
     IRModule,
     JumpTerminator,
@@ -55,16 +56,28 @@ class CCodeGenerator:
 
     def _emit_main(self, function: IRFunction) -> list[str]:
         lines = ["int main(void) {"]
+
+        if function.return_type != ValueType.VOID:
+            lines.append(
+                f"    {c_type_name(function.return_type)} __ret_value = {self._default_initializer(function.return_type)};"
+            )
         lines.extend(self._emit_locals(function))
-        lines.extend(self._emit_blocks(function.blocks, function))
+        lines.extend(self._emit_blocks(function.blocks, function, "__ret_value"))
+        lines.extend(self._emit_cleanup(function, "__ret_value"))
         lines.append("}")
         return lines
 
     def _emit_function(self, function: IRFunction) -> list[str]:
         lines = [f"{self._prototype(function)} {{"]
 
+        if function.return_type != ValueType.VOID:
+            lines.append(
+                f"    {c_type_name(function.return_type)} __ret_value = {self._default_initializer(function.return_type)};"
+            )
+
         lines.extend(self._emit_locals(function))
-        lines.extend(self._emit_blocks(function.blocks, function))
+        lines.extend(self._emit_blocks(function.blocks, function, "__ret_value"))
+        lines.extend(self._emit_cleanup(function, "__ret_value"))
 
         lines.append("}")
         return lines
@@ -101,6 +114,7 @@ class CCodeGenerator:
         self,
         blocks: list[BasicBlock],
         function: IRFunction,
+        ret_var: str,
     ) -> list[str]:
 
         type_map = self._build_type_map(function)
@@ -243,6 +257,11 @@ class CCodeGenerator:
                         f"{self.runtime.print_call(instruction.value, instruction.value_type, instruction.newline)}"
                     )
 
+                elif isinstance(instruction, DecRef):
+                    lines.append(
+                        f"    if ({instruction.target}) {{ py_decref({instruction.target}); {instruction.target} = NULL; }}"
+                    )
+
             terminator = block.terminator
 
             if isinstance(terminator, JumpTerminator):
@@ -270,22 +289,18 @@ class CCodeGenerator:
                 )
 
             elif isinstance(terminator, ReturnTerminator):
-                if terminator.value is not None:
+                if terminator.value is None:
+                    lines.append("    goto cleanup;")
+                else:
                     ret_type = type_map.get(terminator.value, ValueType.UNKNOWN)
                     if ret_type == ValueType.STRING:
                         lines.append(
                             f"    py_incref({terminator.value});"
                         )
-
-                lines.extend(self._emit_decref_locals(function))
-
-                if terminator.value is None:
-                    lines.append("    return;")
-
-                else:
                     lines.append(
-                        f"    return {terminator.value};"
+                        f"    {ret_var} = {terminator.value};"
                     )
+                    lines.append("    goto cleanup;")
 
         return lines
 
@@ -293,6 +308,16 @@ class CCodeGenerator:
         name = f"__tmp{self._temp_id}"
         self._temp_id += 1
         return name
+
+    def _emit_cleanup(self, function: IRFunction, ret_var: str) -> list[str]:
+        lines: list[str] = []
+        lines.append("cleanup: ;")
+        lines.extend(self._emit_decref_locals(function))
+        if function.return_type == ValueType.VOID:
+            lines.append("    return;")
+        else:
+            lines.append(f"    return {ret_var};")
+        return lines
 
     def _emit_call(
         self,
@@ -319,11 +344,14 @@ class CCodeGenerator:
     def _emit_decref_locals(self, function: IRFunction) -> list[str]:
         lines: list[str] = []
         params = set(name for name, _ in function.params)
-        for name, value_type in sorted(function.locals.items()):
+        for name, value_type in sorted(function.locals.items(), reverse=True):
             if name in params:
                 continue
             if value_type == ValueType.STRING:
-                lines.append(f"    py_decref({name});")
+                info = function.ownership.get(name) if hasattr(function, "ownership") else None
+                if info is not None and not info.cleanup_required:
+                    continue
+                lines.append(f"    if ({name}) py_decref({name});")
         return lines
 
     @staticmethod
@@ -350,7 +378,7 @@ class CCodeGenerator:
             return "0"
 
         if value_type == ValueType.STRING:
-            return '""'
+            return "NULL"
 
         return "0"
 

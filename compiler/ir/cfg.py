@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from compiler.core.types import FunctionType, ValueType
+from compiler.ir.ownership import SSAValueInfo
 
 
 @dataclass
@@ -56,6 +57,11 @@ class Print(IRInstruction):
 
 
 @dataclass
+class DecRef(IRInstruction):
+    target: str
+
+
+@dataclass
 class Phi(IRInstruction):
     target: str
     variable: str
@@ -104,6 +110,7 @@ class CFGFunction:
     entry_block: str = ""
     locals: dict[str, ValueType] = field(default_factory=dict)
     globals_read: set[str] = field(default_factory=set)
+    ownership: dict[str, SSAValueInfo] = field(default_factory=dict)
 
 
 @dataclass

@@ -254,13 +254,12 @@ class StmtParser:
         self.cursor.expect("OP", "(", msg="expected '(' after function name")
         params, defaults, kwonly, kwonly_defaults, vararg, kwarg = self._parse_params()
         self.cursor.expect("OP", ")", msg="expected ')' after parameters")
-        # Skip return annotation
+        # Skip return annotation (parse and discard — annotation is not used by the compiler)
         if self.cursor.peek().text == "->":
             self.cursor.advance()
             self.expr.parse_expression()
-            self.errors.error("Syntax", "function return annotations are not supported",
-                              self.cursor.peek().line, self.cursor.peek().column)
-            return None
+            self.errors.warning("Syntax", "return type annotations are ignored by this compiler",
+                                self.cursor.peek().line, self.cursor.peek().column)
         self.cursor.expect("OP", ":", msg="expected ':' after function signature")
         self._function_depth += 1
         body = self._parse_block(allow_docstring=True)
@@ -491,7 +490,19 @@ class StmtParser:
         type_name = None
         name = None
         if self.cursor.peek().text != ":":
-            type_name = self.cursor.expect("NAME", msg="expected exception type").text
+            # Support both bare name and tuple: except ValueError or except (A, B):
+            if self.cursor.peek().text == "(":
+                self.cursor.advance()  # consume '('
+                names = [self.cursor.expect("NAME", msg="expected exception type").text]
+                while self.cursor.peek().text == ",":
+                    self.cursor.advance()
+                    if self.cursor.peek().text == ")":
+                        break
+                    names.append(self.cursor.expect("NAME", msg="expected exception type").text)
+                self.cursor.expect("OP", ")", msg="expected ')' after exception types")
+                type_name = ",".join(names)  # e.g. "TypeError,ValueError"
+            else:
+                type_name = self.cursor.expect("NAME", msg="expected exception type").text
             if self.cursor.peek().text == "as":
                 self.cursor.advance()
                 name = self.cursor.expect("NAME").text

@@ -37,6 +37,7 @@ from compiler.ir.cfg import (
     ReturnTerminator,
     UnaryOp,
 )
+from compiler.ir.ownership import OwnerKind, default_value_info
 from compiler.semantic import SemanticModel
 
 
@@ -102,7 +103,12 @@ class CFGLowering:
         )
 
     def _new_function(self, name: str, params, return_type: ValueType, locals: dict[str, ValueType] | None = None) -> CFGFunction:
-        return CFGFunction(name=name, params=params, return_type=return_type, locals=dict(locals or {}))
+        function = CFGFunction(name=name, params=params, return_type=return_type, locals=dict(locals or {}))
+        for param_name, param_type in params:
+            function.ownership[param_name] = default_value_info(param_name, param_type, OwnerKind.BORROWED)
+        for local_name, local_type in function.locals.items():
+            function.ownership[local_name] = default_value_info(local_name, local_type, OwnerKind.OWNED)
+        return function
 
     def _new_block(self, prefix: str) -> BasicBlock:
         self.block_counter += 1

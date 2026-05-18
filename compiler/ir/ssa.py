@@ -12,6 +12,7 @@ from compiler.ir.cfg import (
     Call,
     CFGFunction,
     CFGModule,
+    DecRef,
     JumpTerminator,
     LoadConst,
     Phi,
@@ -139,6 +140,8 @@ class SSATransformer:
             instruction.operand = self._current_name(instruction.operand, stacks)
         elif isinstance(instruction, Call):
             instruction.args = [self._current_name(arg, stacks) for arg in instruction.args]
+        elif isinstance(instruction, DecRef):
+            instruction.target = self._current_name(instruction.target, stacks)
         elif isinstance(instruction, Print):
             instruction.value = self._current_name(instruction.value, stacks)
 
@@ -231,6 +234,8 @@ def ssa_uses(node) -> list[str]:
         return [node.value]
     return []
 
+    if isinstance(node, DecRef):
+        return [node.target]
 
 def replace_ssa_uses(node, resolve) -> None:
     if isinstance(node, Phi):
@@ -725,6 +730,12 @@ class SSADestructor:
             if name not in param_names
         }
         function.globals_read = {mapping.get(name, name) for name in function.globals_read}
+        function.ownership = {
+            mapping.get(name, name): info
+            for name, info in function.ownership.items()
+        }
+        for name, info in function.ownership.items():
+            info.name = name
 
         for block in function.blocks:
             for instruction in block.instructions:
@@ -767,6 +778,8 @@ class SSADestructor:
             if instruction.target is not None:
                 instruction.target = mapping.get(instruction.target, instruction.target)
             instruction.args = [mapping.get(arg, arg) for arg in instruction.args]
+        elif isinstance(instruction, DecRef):
+            instruction.target = mapping.get(instruction.target, instruction.target)
         elif isinstance(instruction, Print):
             instruction.value = mapping.get(instruction.value, instruction.value)
 
