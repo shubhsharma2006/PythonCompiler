@@ -1,7 +1,8 @@
-import unittest
-import sys
 import os
-from compiler.pipeline import _analyze_source
+import sys
+import unittest
+
+from compiler.pipeline import _analyze_source, _normalize_program_for_frontend_compare
 
 # Make sure we can import from run_tests
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -28,10 +29,9 @@ class TestParserEquivalence(unittest.TestCase):
                 self.assertTrue(res_cpython.success, f"CPython parser failed on {name}")
                 self.assertTrue(res_owned.success, f"Owned parser failed on {name}")
                 
-                ast_cpython = res_cpython.program
-                ast_owned = res_owned.program
-                
-                # Check structural equivalence
+                ast_cpython = _normalize_program_for_frontend_compare(res_cpython.program)
+                ast_owned = _normalize_program_for_frontend_compare(res_owned.program)
+
                 self.assertEqual(ast_cpython, ast_owned, f"AST mismatch on {name}")
 
 if __name__ == '__main__':

@@ -21,6 +21,28 @@ class BuiltinHost(Protocol):
     def invoke_builtin_callable(self, callable_obj: object, *args, **kwargs) -> object: ...
 
 
+class _DirectBuiltinHost:
+    output: list[str] = []
+
+    def format_value(self, value: object) -> str:
+        return str(value)
+
+    def current_globals(self) -> dict[str, object]:
+        return {}
+
+    def current_locals(self) -> dict[str, object]:
+        return {}
+
+    def build_super(self, *args) -> object:
+        return super(*args)
+
+    def invoke_builtin_callable(self, callable_obj: object, *args, **kwargs) -> object:
+        return callable_obj(*args, **kwargs)
+
+
+_DIRECT_HOST = _DirectBuiltinHost()
+
+
 def builtin_isinstance(obj: object, classinfo: object) -> bool:
     obj = unwrap_runtime_value(obj)
     classinfo = unwrap_runtime_value(classinfo)
@@ -60,10 +82,16 @@ def builtin_range(*args):
     return range(*normalized)
 
 
-def builtin_len(host: BuiltinHost, *args):
-    if len(args) != 1:
+def builtin_len(*args):
+    if args and hasattr(args[0], "invoke_builtin_callable"):
+        host = args[0]
+        call_args = args[1:]
+    else:
+        host = _DIRECT_HOST
+        call_args = args
+    if len(call_args) != 1:
         raise VMError("len() expects exactly 1 argument")
-    value = unwrap_runtime_value(args[0])
+    value = unwrap_runtime_value(call_args[0])
     if isinstance(value, (list, tuple, str, dict, set)):
         return len(value)
 
@@ -134,7 +162,7 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
         "print": lambda *args, sep=" ", end="\n", file=None, flush=False: builtin_print(
             host, *args, sep=sep, end=end, file=file, flush=flush
         ),
-    "len": lambda *args: builtin_len(host, *args),
+        "len": lambda *args: builtin_len(host, *args),
         "range": builtin_range,
         "int": int,
         "float": float,
@@ -166,7 +194,7 @@ def build_builtins(host: BuiltinHost) -> dict[str, object]:
             host, iterable, key=key, reverse=reverse
         ),
         "iter": iter,
-    "next": builtin_next,
+        "next": builtin_next,
         "abs": abs,
         "round": round,
         "min": min,
