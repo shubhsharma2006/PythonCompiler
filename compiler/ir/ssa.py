@@ -778,6 +778,8 @@ class SSADestructor:
             if instruction.target is not None:
                 instruction.target = mapping.get(instruction.target, instruction.target)
             instruction.args = [mapping.get(arg, arg) for arg in instruction.args]
+            instruction.exception_live = [mapping.get(name, name) for name in instruction.exception_live]
+            instruction.exception_live = [mapping.get(name, name) for name in instruction.exception_live]
         elif isinstance(instruction, DecRef):
             instruction.target = mapping.get(instruction.target, instruction.target)
         elif isinstance(instruction, Print):

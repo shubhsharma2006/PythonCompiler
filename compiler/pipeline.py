@@ -61,6 +61,7 @@ from compiler.ir import (
     SSAValuePropagation,
     SSATransformer,
     OwnershipDecrefPlacement,
+    ExceptionalLivenessAnalysis,
 )
 from compiler.optimizer import ConstantFolder
 from compiler.runtime import CRuntimeSupport
@@ -1459,6 +1460,7 @@ def compile_source(
     ssa_module = SSADeadCodeEliminator().optimize(ssa_module)
     ir_module = SSADestructor().lower(ssa_module)
     ir_module = OwnershipDecrefPlacement().apply(ir_module)
+    ir_module = ExceptionalLivenessAnalysis().apply(ir_module)
     runtime = CRuntimeSupport()
     c_code = CCodeGenerator().generate(ir_module)
     output_path = os.path.abspath(output)

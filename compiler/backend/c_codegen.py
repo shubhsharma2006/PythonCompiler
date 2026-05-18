@@ -251,6 +251,15 @@ class CCodeGenerator:
                             f"    {instruction.target} = {call_text};"
                         )
 
+                    if instruction.can_raise and instruction.exception_target:
+                        if instruction.exception_live:
+                            lines.append(
+                                f"    /* exception live set: {', '.join(instruction.exception_live)} */"
+                            )
+                        lines.append(
+                            f"    if (py_error_occurred()) goto {instruction.exception_target};"
+                        )
+
                 elif isinstance(instruction, Print):
                     lines.append(
                         f"    "

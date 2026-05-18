@@ -47,6 +47,9 @@ class Call(IRInstruction):
     func_name: str
     args: list[str]
     value_type: ValueType
+    can_raise: bool = False
+    exception_target: str | None = None
+    exception_live: list[str] = field(default_factory=list)
 
 
 @dataclass

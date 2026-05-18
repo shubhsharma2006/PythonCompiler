@@ -50,6 +50,9 @@ typedef void (*py_visit_fn)(void *obj, void (*visit)(void *child, void *ctx), vo
 void py_register_type(int type_id, const char *name, py_destroy_fn destroy, py_visit_fn visit);
 void py_visit_children(void *obj, void (*visit)(void *child, void *ctx), void *ctx);
 
+/* Exception state (scaffolding) */
+int py_error_occurred(void);
+
 /* Print with newline */
 void py_print_int(int value);
 void py_print_float(double value);

@@ -401,7 +401,7 @@ class CFGLowering:
             args = [self._emit_expr(arg)[0] for arg in expr.args]
             value_type = self._runtime_type(expr)
             target = None if discard_result or value_type == ValueType.VOID else self._new_temp(value_type)
-            self._emit(Call(target, expr.func_name, args, value_type))
+            self._emit(Call(target, expr.func_name, args, value_type, can_raise=True, exception_target="cleanup"))
             return target or "0", value_type
 
         return "0", ValueType.INT

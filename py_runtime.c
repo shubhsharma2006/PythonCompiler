@@ -151,6 +151,10 @@ void py_visit_children(void *obj, void (*visit)(void *child, void *ctx), void *c
     }
 }
 
+int py_error_occurred(void) {
+    return 0;
+}
+
 /* ----- existing runtime helpers ----- */
 void py_print_int(int value) {
     printf("%d\n", value);

@@ -20,6 +20,7 @@ from compiler.ir.lowering import CFGLowering
 from compiler.ir.passes import CFGConstantPropagation
 from compiler.ir.ownership import OwnerKind, SSAValueInfo, default_value_info
 from compiler.ir.ownership_pass import OwnershipDecrefPlacement
+from compiler.ir.exception_analysis import ExceptionalLivenessAnalysis
 from compiler.ir.ssa import (
     SSAConstantPropagation,
     SSACopyPropagation,
@@ -58,6 +59,7 @@ __all__ = [
     "SSAValueInfo",
     "default_value_info",
     "OwnershipDecrefPlacement",
+    "ExceptionalLivenessAnalysis",
     "Phi",
     "JumpTerminator",
     "LoadConst",
