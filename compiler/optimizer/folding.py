@@ -42,6 +42,7 @@ from compiler.core.ast import (
     WhileStmt,
     WithStmt,
     YieldExpr,
+    YieldFromExpr,
 )
 
 
@@ -248,6 +249,10 @@ class ConstantFolder:
         if isinstance(expr, YieldExpr):
             if expr.value is not None:
                 expr.value = self._optimize_expr(expr.value)
+            return expr
+
+        if isinstance(expr, YieldFromExpr):
+            expr.value = self._optimize_expr(expr.value)
             return expr
 
         if isinstance(expr, IndexExpr):

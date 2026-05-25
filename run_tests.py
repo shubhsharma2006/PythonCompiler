@@ -265,6 +265,16 @@ SOURCE_TESTS = [
         "expected": ["4", "16", "3"],
     },
     {
+        "name": "Generator expressions",
+        "source": """base = 10\ng = (base + x for x in [1, 2, 3] if x > 1)\nprint(next(g))\nprint(next(g))\ntry:\n    next(g)\nexcept StopIteration:\n    print("done")\n""",
+        "expected": ["12", "13", "done"],
+    },
+    {
+        "name": "Yield from",
+        "source": """def inner():\n    yield 1\n    yield 2\n\ndef outer():\n    yield 0\n    result = yield from inner()\n    print(result is None)\n    yield 3\n\nfor value in outer():\n    print(value)\n""",
+        "expected": ["0", "1", "2", "True", "3"],
+    },
+    {
         "name": "Classes attributes and methods",
         "source": """class Counter:\n    def __init__(self, start):\n        self.value = start\n    def inc(self):\n        self.value = self.value + 1\n        return self.value\n\ncounter = Counter(5)\nprint(counter.value)\nprint(counter.inc())\nprint(counter.value)\n""",
         "expected": ["5", "6", "6"],

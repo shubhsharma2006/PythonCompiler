@@ -212,6 +212,35 @@ class ExceptionCleanupTests(unittest.TestCase):
         self.assertIn("py_floor_div_int", c_code)
         self.assertIn("if (py_error_occurred()) goto cleanup;", c_code)
 
+    def test_try_finally_emits_error_check_after_finalbody(self):
+        c_code = self.compile_program(
+            "try:\n"
+            "    raise Exception('boom')\n"
+            "finally:\n"
+            "    print('done')\n"
+        )
+        self.assertIn("try_finally", c_code)
+        self.assertIn("py_error_occurred()", c_code)
+        self.assertIn("try_finally_error", c_code)
+        finally_block = c_code.split("try_finally", 1)[-1]
+        last_print = finally_block.rfind("py_write_str")
+        error_check = finally_block.find("py_error_occurred()")
+        self.assertNotEqual(last_print, -1)
+        self.assertGreater(error_check, last_print)
+
+    def test_nested_try_finally_try_except_compiles(self):
+        self.compile_program(
+            "try:\n"
+            "    try:\n"
+            "        raise Exception('boom')\n"
+            "    except Exception:\n"
+            "        print('handled')\n"
+            "    finally:\n"
+            "        print('inner finally')\n"
+            "finally:\n"
+            "    print('outer finally')\n"
+        )
+
     def test_exceptional_successor_added_for_raising_call(self):
         ownership = {
             "msg": default_value_info("msg", ValueType.STRING, OwnerKind.OWNED),

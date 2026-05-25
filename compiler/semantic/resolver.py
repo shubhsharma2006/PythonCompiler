@@ -22,6 +22,7 @@ from compiler.core.ast import (
     FromImportStmt,
     FunctionDef,
     GlobalStmt,
+    GeneratorExpr,
     IfStmt,
     IfExpr,
     IndexExpr,
@@ -51,6 +52,7 @@ from compiler.core.ast import (
     WhileStmt,
     WithStmt,
     YieldExpr,
+    YieldFromExpr,
 )
 from compiler.core.signature import bind_call_arguments
 from compiler.core.types import FunctionType, ValueType
@@ -198,7 +200,7 @@ class NameResolver:
             return
 
         if isinstance(statement, ExprStmt):
-            if not isinstance(statement.expr, (CallExpr, CallValueExpr, MethodCallExpr, YieldExpr)):
+            if not isinstance(statement.expr, (CallExpr, CallValueExpr, MethodCallExpr, YieldExpr, YieldFromExpr)):
                 self._error(statement, "only function and method calls may be used as standalone expressions")
             self._resolve_expr(statement.expr, scope)
             return
@@ -447,6 +449,11 @@ class NameResolver:
             self._resolve_expr(expr.value, comp_scope)
             return
 
+        if isinstance(expr, GeneratorExpr):
+            comp_scope = self._resolve_comprehension(expr.generators, scope)
+            self._resolve_expr(expr.element, comp_scope)
+            return
+
         if isinstance(expr, IfExpr):
             self._resolve_expr(expr.condition, scope)
             self._resolve_expr(expr.body, scope)
@@ -481,6 +488,12 @@ class NameResolver:
                 self._error(expr, "yield is only valid inside a function")
             if expr.value is not None:
                 self._resolve_expr(expr.value, scope)
+            return
+
+        if isinstance(expr, YieldFromExpr):
+            if self.current_function is None:
+                self._error(expr, "yield from is only valid inside a function")
+            self._resolve_expr(expr.value, scope)
             return
 
         if isinstance(expr, IndexExpr):
@@ -613,4 +626,3 @@ class NameResolver:
             handler_scope.define(handler.name, ValueType.UNKNOWN)
         for child in handler.body:
             self._resolve_statement(child, handler_scope)
-

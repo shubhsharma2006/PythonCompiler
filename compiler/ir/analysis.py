@@ -20,7 +20,11 @@ def reachable_block_names(function: CFGFunction) -> set[str]:
             continue
         seen.add(name)
         block = blocks[name]
-        stack.extend(sorted(block.successors - seen))
+        # include exceptional successors so exception-only paths remain reachable
+        succs = set(block.successors)
+        if hasattr(block, "exceptional_successors"):
+            succs |= set(block.exceptional_successors)
+        stack.extend(sorted(succs - seen))
     return seen
 
 

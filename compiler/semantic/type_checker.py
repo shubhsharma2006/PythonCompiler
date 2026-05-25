@@ -22,6 +22,7 @@ from compiler.core.ast import (
     FromImportStmt,
     FunctionDef,
     GlobalStmt,
+    GeneratorExpr,
     IfStmt,
     IfExpr,
     IndexExpr,
@@ -51,6 +52,7 @@ from compiler.core.ast import (
     WhileStmt,
     WithStmt,
     YieldExpr,
+    YieldFromExpr,
 )
 from compiler.core.signature import bind_call_arguments
 from compiler.core.types import FunctionType, ValueType, can_truth_test, is_numeric, merge_types
@@ -632,6 +634,12 @@ class TypeChecker:
                     self._error(expr.value, "cannot yield a void expression")
             return self._set_expr_type(expr, ValueType.UNKNOWN)
 
+        if isinstance(expr, YieldFromExpr):
+            value_type = self._check_expr(expr.value, scope)
+            if value_type == ValueType.VOID:
+                self._error(expr.value, "cannot yield from a void expression")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
+
         if isinstance(expr, CallValueExpr):
             callee_type = self._check_expr(expr.callee, scope)
             if callee_type == ValueType.VOID:
@@ -669,6 +677,13 @@ class TypeChecker:
             if value_type == ValueType.VOID:
                 self._error(expr.value, "dict comprehension values cannot be void")
             return self._set_expr_type(expr, ValueType.DICT)
+
+        if isinstance(expr, GeneratorExpr):
+            comp_scope = self._check_comprehension(expr.generators, scope)
+            element_type = self._check_expr(expr.element, comp_scope)
+            if element_type == ValueType.VOID:
+                self._error(expr.element, "generator expression elements cannot be void")
+            return self._set_expr_type(expr, ValueType.UNKNOWN)
 
         if isinstance(expr, IndexExpr):
             collection_type = self._check_expr(expr.collection, scope)
@@ -858,6 +873,8 @@ class TypeChecker:
     def _expr_contains_yield(self, expr) -> bool:
         if isinstance(expr, YieldExpr):
             return True
+        if isinstance(expr, YieldFromExpr):
+            return True
         if isinstance(expr, BinaryExpr):
             return self._expr_contains_yield(expr.left) or self._expr_contains_yield(expr.right)
         if isinstance(expr, UnaryExpr):
@@ -911,6 +928,11 @@ class TypeChecker:
             )
         if isinstance(expr, DictCompExpr):
             return self._expr_contains_yield(expr.key) or self._expr_contains_yield(expr.value) or any(
+                self._expr_contains_yield(generator.iterator) or any(self._expr_contains_yield(condition) for condition in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, GeneratorExpr):
+            return self._expr_contains_yield(expr.element) or any(
                 self._expr_contains_yield(generator.iterator) or any(self._expr_contains_yield(condition) for condition in generator.ifs)
                 for generator in expr.generators
             )

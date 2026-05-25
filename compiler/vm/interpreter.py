@@ -6,7 +6,7 @@ from typing import Callable
 
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule
 from compiler.vm.builtins import build_builtins
-from compiler.vm.errors import RaisedSignal, ReturnSignal, VMError, YieldSignal
+from compiler.vm.errors import JumpSignal, RaisedSignal, ReturnSignal, VMError, YieldSignal
 from compiler.vm.objects import (
     ClassObject,
     Closure,
@@ -59,6 +59,12 @@ class Frame:
 
 
 _GENERATOR_MISSING = object()
+
+
+@dataclass
+class YieldFromState:
+    iterator: object
+    started: bool = False
 
 
 class GeneratorObject:
@@ -167,6 +173,10 @@ class BytecodeInterpreter:
                     if not self._handle_exception(frame, signal):
                         raise
 
+                except JumpSignal as signal:
+                    if not self._handle_jump(frame, signal):
+                        frame.ip = signal.target
+
         except ReturnSignal as signal:
             return signal.value
 
@@ -193,6 +203,9 @@ class BytecodeInterpreter:
             except RaisedSignal as signal:
                 if not self._handle_exception(frame, signal):
                     raise
+            except JumpSignal as signal:
+                if not self._handle_jump(frame, signal):
+                    frame.ip = signal.target
 
         raise StopIteration
 
@@ -206,6 +219,66 @@ class BytecodeInterpreter:
 
         if op == "YIELD_VALUE":
             value = frame.stack.pop() if frame.stack else None
+            raise YieldSignal(value)
+
+        if op == "YIELD_FROM":
+            top = frame.stack.pop()
+            if isinstance(top, YieldFromState):
+                state = top
+                sent_value = None if state.started else _GENERATOR_MISSING
+            elif frame.stack and isinstance(frame.stack[-1], YieldFromState):
+                sent_value = top
+                state = frame.stack.pop()
+            else:
+                sent_value = _GENERATOR_MISSING
+                state = YieldFromState(iterator=iter(unwrap_runtime_value(top)))
+            try:
+                iterator = state.iterator
+                if sent_value is _GENERATOR_MISSING or sent_value is None:
+                    try:
+                        next_method = py_load_attr(iterator, "__next__")
+                    except VMError:
+                        next_method = None
+                    if next_method is not None:
+                        if self._current_frame is None:
+                            raise VMError("no active frame for __next__ dispatch")
+                        value = py_invoke_callable(
+                            next_method,
+                            [],
+                            self._current_frame.module,
+                            kwargs=None,
+                            execute_function=self._execute_function,
+                        )
+                    else:
+                        value = next(iterator)
+                else:
+                    try:
+                        send_method = py_load_attr(iterator, "send")
+                    except VMError:
+                        send_method = None
+                    if send_method is None:
+                        raise VMError("cannot send non-None value into yield from iterator")
+                    if self._current_frame is None:
+                        raise VMError("no active frame for send dispatch")
+                    value = py_invoke_callable(
+                        send_method,
+                        [sent_value],
+                        self._current_frame.module,
+                        kwargs=None,
+                        execute_function=self._execute_function,
+                    )
+            except RaisedSignal as signal:
+                if py_matches_exception(signal.value, StopIteration):
+                    frame.stack.append(None)
+                    return
+                raise
+            except StopIteration:
+                frame.stack.append(None)
+                return
+
+            state.started = True
+            frame.stack.append(state)
+            frame.ip -= 1
             raise YieldSignal(value)
 
         if op == "LOAD_NAME":
@@ -346,6 +419,9 @@ class BytecodeInterpreter:
         if op == "JUMP":
             frame.ip = int(arg)
             return
+
+        if op == "JUMP_UNWIND":
+            raise JumpSignal(int(arg))
 
         if op == "JUMP_IF_FALSE":
             condition = frame.stack.pop()
@@ -875,6 +951,11 @@ class BytecodeInterpreter:
                 frame.try_stack.pop()
             return
 
+        if op == "POP_FINALLY":
+            if frame.pending_unwind is None and frame.try_stack and frame.try_stack[-1].kind == "finally":
+                frame.try_stack.pop()
+            return
+
         if op == "LOAD_EXCEPTION":
             if not frame.active_exceptions:
                 raise VMError("no active exception")
@@ -895,6 +976,8 @@ class BytecodeInterpreter:
 
         if op == "END_FINALLY":
             if frame.pending_unwind is None:
+                if frame.try_stack and frame.try_stack[-1].kind == "finally":
+                    frame.try_stack.pop()
                 return
             action, payload = frame.pending_unwind
             frame.pending_unwind = None
@@ -903,8 +986,7 @@ class BytecodeInterpreter:
             if action == "raise":
                 raise payload
             if action == "jump":
-                frame.ip = int(payload)
-                return
+                raise JumpSignal(int(payload))
             return
 
         if op == "WITH_ENTER":
@@ -1153,6 +1235,24 @@ class BytecodeInterpreter:
             frame.pending_unwind = ("return", signal.value)
             frame.ip = int(handler.target)
 
+            return True
+
+        return False
+
+    def _handle_jump(
+        self,
+        frame: Frame,
+        signal: JumpSignal,
+    ) -> bool:
+
+        while frame.try_stack:
+            handler = frame.try_stack.pop()
+
+            if handler.kind != "finally":
+                continue
+
+            frame.pending_unwind = ("jump", signal.target)
+            frame.ip = int(handler.target)
             return True
 
         return False

@@ -3,10 +3,10 @@ from __future__ import annotations
 from compiler.core.ast import (
     AttributeExpr, BinaryExpr, BoolOpExpr, CallExpr, CallValueExpr,
     CompareChainExpr, CompareExpr, Comprehension, ConstantExpr,
-    DictCompExpr, DictExpr, Expression, IfExpr, IndexExpr,
+    DictCompExpr, DictExpr, Expression, GeneratorExpr, IfExpr, IndexExpr,
     KwStarredExpr, LambdaExpr, ListCompExpr, ListExpr, MethodCallExpr,
     NameExpr, NamedExpr, ReturnStmt, SetCompExpr, SetExpr, SliceExpr,
-    SourceSpan, StarredExpr, TupleExpr, UnaryExpr, FunctionDef, YieldExpr,
+    SourceSpan, StarredExpr, TupleExpr, UnaryExpr, FunctionDef, YieldExpr, YieldFromExpr,
 )
 from compiler.frontend.parser.token_cursor import ParseError, TokenCursor
 from compiler.frontend.parser.precedence import (
@@ -104,8 +104,9 @@ class ExprParser:
     def _parse_yield(self) -> Expression:
         tok = self.cursor.advance()
         if self.cursor.peek_kind() == "NAME" and self.cursor.peek_text() == "from":
-            from_tok = self.cursor.advance()
-            raise ParseError("'yield from' is not supported yet", from_tok.line, from_tok.column)
+            self.cursor.advance()
+            value = self.parse_expression(BP_NONE)
+            return YieldFromExpr(span=self.cursor.span_from(tok), value=value)
         if self.cursor.peek_kind() in ("NEWLINE", "NL", "DEDENT", "ENDMARKER"):
             return YieldExpr(span=self.cursor.span_from(tok), value=None)
         if self.cursor.peek_kind() == "OP" and self.cursor.peek_text() in {")", "]", "}", ",", ":"}:
@@ -407,8 +408,11 @@ class ExprParser:
         if self.cursor.peek().text == ")":
             self.cursor.advance()
             return TupleExpr(span=self.cursor.span_from(start), elements=[])
-        # Comprehension inside parens not supported; parse as expr/tuple
         first = self.parse_expression()
+        if self.cursor.peek().kind == "NAME" and self.cursor.peek().text == "for":
+            generators = self._parse_comprehension_generators()
+            self.cursor.expect("OP", ")", msg="expected ')' after generator expression")
+            return GeneratorExpr(span=self.cursor.span_from(start), element=first, generators=generators)
         if self.cursor.peek().text == ",":
             elements = [first]
             while self.cursor.peek().text == ",":

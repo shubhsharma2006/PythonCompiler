@@ -22,6 +22,7 @@ from compiler.core.ast import (
     ForStmt,
     FromImportStmt,
     FunctionDef,
+    GeneratorExpr,
     GlobalStmt,
     IfExpr,
     IfStmt,
@@ -52,6 +53,7 @@ from compiler.core.ast import (
     WhileStmt,
     WithStmt,
     YieldExpr,
+    YieldFromExpr,
 )
 from compiler.vm.bytecode import BytecodeFunction, BytecodeModule, Instruction
 
@@ -533,14 +535,14 @@ class BytecodeLowerer:
             if not self.loop_stack:
                 return
             _, break_label = self.loop_stack[-1]
-            instructions.append(Instruction("JUMP", break_label))
+            instructions.append(Instruction("JUMP_UNWIND", break_label))
             return
 
         if isinstance(statement, ContinueStmt):
             if not self.loop_stack:
                 return
             continue_label, _ = self.loop_stack[-1]
-            instructions.append(Instruction("JUMP", continue_label))
+            instructions.append(Instruction("JUMP_UNWIND", continue_label))
             return
 
         if isinstance(statement, RaiseStmt):
@@ -565,14 +567,14 @@ class BytecodeLowerer:
                     (handler_label, handler.type_name, handler.name)
                 )
 
-            if handler_specs:
-                instructions.append(
-                    Instruction("TRY_EXCEPT", handler_specs)
-                )
-
             if finally_label is not None:
                 instructions.append(
                     Instruction("TRY_FINALLY", finally_label)
+                )
+
+            if handler_specs:
+                instructions.append(
+                    Instruction("TRY_EXCEPT", handler_specs)
                 )
 
             for child in statement.body:
@@ -613,6 +615,7 @@ class BytecodeLowerer:
 
             if finally_label is not None:
                 instructions.append(Instruction("LABEL", finally_label))
+                instructions.append(Instruction("POP_FINALLY"))
                 for child in statement.finalbody:
                     self._emit_statement(child, instructions, parent_key)
                 instructions.append(Instruction("END_FINALLY"))
@@ -635,6 +638,7 @@ class BytecodeLowerer:
             instructions.append(Instruction("POP_TRY"))
             instructions.append(Instruction("JUMP", finally_label))
             instructions.append(Instruction("LABEL", finally_label))
+            instructions.append(Instruction("POP_FINALLY"))
             instructions.append(Instruction("WITH_EXIT"))
             instructions.append(Instruction("END_FINALLY"))
             return
@@ -853,6 +857,32 @@ class BytecodeLowerer:
             )
             return
 
+        if isinstance(expr, GeneratorExpr):
+            generated_function = self._build_generator_expr_function(expr)
+            lowered = self._lower_function(
+                generated_function,
+                parent_key=parent_key or "<genexpr>",
+            )
+
+            instructions.append(
+                Instruction(
+                    "MAKE_FUNCTION",
+                    (
+                        lowered.key,
+                        0,
+                        [],
+                    ),
+                )
+            )
+            self._emit_expr(
+                expr.generators[0].iterator,
+                instructions,
+                parent_key,
+                name_bindings,
+            )
+            instructions.append(Instruction("CALL_VALUE", 1))
+            return
+
         if isinstance(expr, YieldExpr):
             if expr.value is None:
                 instructions.append(Instruction("LOAD_CONST", None))
@@ -864,6 +894,16 @@ class BytecodeLowerer:
                     name_bindings,
                 )
             instructions.append(Instruction("YIELD_VALUE"))
+            return
+
+        if isinstance(expr, YieldFromExpr):
+            self._emit_expr(
+                expr.value,
+                instructions,
+                parent_key,
+                name_bindings,
+            )
+            instructions.append(Instruction("YIELD_FROM"))
             return
 
         if isinstance(expr, CallExpr):
@@ -1335,6 +1375,8 @@ class BytecodeLowerer:
     def _expr_uses_yield(self, expr) -> bool:
         if isinstance(expr, YieldExpr):
             return True
+        if isinstance(expr, YieldFromExpr):
+            return True
         if isinstance(expr, BinaryExpr):
             return self._expr_uses_yield(expr.left) or self._expr_uses_yield(expr.right)
         if isinstance(expr, UnaryExpr):
@@ -1391,6 +1433,11 @@ class BytecodeLowerer:
             )
         if isinstance(expr, DictCompExpr):
             return self._expr_uses_yield(expr.key) or self._expr_uses_yield(expr.value) or any(
+                self._expr_uses_yield(generator.iterator) or any(self._expr_uses_yield(cond) for cond in generator.ifs)
+                for generator in expr.generators
+            )
+        if isinstance(expr, GeneratorExpr):
+            return self._expr_uses_yield(expr.element) or any(
                 self._expr_uses_yield(generator.iterator) or any(self._expr_uses_yield(cond) for cond in generator.ifs)
                 for generator in expr.generators
             )
@@ -1461,6 +1508,74 @@ class BytecodeLowerer:
 
         instructions.append(Instruction("JUMP", loop_start))
         instructions.append(Instruction("LABEL", loop_end))
+
+    def _build_generator_expr_function(
+        self,
+        expr: GeneratorExpr,
+    ) -> FunctionDef:
+        iterator_param = self._new_temp("genexpr_iter")
+        first_generator = expr.generators[0]
+        rebound_first = Comprehension(
+            span=first_generator.span,
+            target=first_generator.target,
+            iterator=NameExpr(
+                span=first_generator.iterator.span,
+                name=iterator_param,
+            ),
+            ifs=first_generator.ifs,
+        )
+
+        body = self._build_generator_expr_body(
+            [rebound_first, *expr.generators[1:]],
+            ExprStmt(
+                span=expr.element.span,
+                expr=YieldExpr(
+                    span=expr.element.span,
+                    value=expr.element,
+                ),
+            ),
+        )
+
+        return FunctionDef(
+            span=expr.span,
+            name=self._new_temp("genexpr"),
+            params=[iterator_param],
+            body=body,
+        )
+
+    def _build_generator_expr_body(
+        self,
+        generators: list[Comprehension],
+        terminal: ExprStmt,
+    ) -> list[object]:
+        if not generators:
+            return [terminal]
+
+        generator = generators[0]
+        body: list[object] = self._build_generator_expr_body(
+            generators[1:],
+            terminal,
+        )
+
+        for predicate in reversed(generator.ifs):
+            body = [
+                IfStmt(
+                    span=predicate.span,
+                    condition=predicate,
+                    body=body,
+                    orelse=[],
+                )
+            ]
+
+        return [
+            ForStmt(
+                span=generator.span,
+                target=generator.target,
+                iterator=generator.iterator,
+                body=body,
+                orelse=[],
+            )
+        ]
 
     @staticmethod
     def _collect_scope_declarations(
@@ -1609,6 +1724,7 @@ class BytecodeLowerer:
 
             if instruction.opcode in {
                 "JUMP",
+                "JUMP_UNWIND",
                 "JUMP_IF_FALSE",
                 "JUMP_IF_TRUE",
                 "FOR_ITER",

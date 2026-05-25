@@ -185,7 +185,6 @@ int py_error_matches(const char *type) {
     return strcmp(py_error_state.type, type) == 0;
 }
 
-/* ----- existing runtime helpers ----- */
 void py_print_int(int value) {
     printf("%d\n", value);
 }
@@ -220,18 +219,14 @@ void py_write_bool(int value) {
 
 const char *py_int_to_str(int value) {
     char *buf = (char *)py_malloc(32, PY_TYPE_STR);
-    if (!buf) {
-        return "";
-    }
+    if (!buf) return "";
     snprintf(buf, 32, "%d", value);
     return buf;
 }
 
 const char *py_float_to_str(double value) {
     char *buf = (char *)py_malloc(64, PY_TYPE_STR);
-    if (!buf) {
-        return "";
-    }
+    if (!buf) return "";
     snprintf(buf, 64, "%g", value);
     return buf;
 }
@@ -250,9 +245,7 @@ const char *py_str_concat(const char *a, const char *b) {
     size_t la = strlen(sa);
     size_t lb = strlen(sb);
     char *result = (char *)py_malloc(la + lb + 1, PY_TYPE_STR);
-    if (!result) {
-        return "";
-    }
+    if (!result) return "";
     memcpy(result, sa, la);
     memcpy(result + la, sb, lb + 1);
     return result;

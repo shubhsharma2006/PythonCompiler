@@ -24,6 +24,7 @@ from compiler.core.ast import (
     FromImportStmt,
     FunctionDef,
     GlobalStmt,
+    GeneratorExpr,
     IfStmt,
     IfExpr,
     ImportStmt,
@@ -57,6 +58,7 @@ from compiler.core.ast import (
     BreakStmt,
     ContinueStmt,
     YieldExpr,
+    YieldFromExpr,
 )
 from compiler.frontend.cst import ParsedModule
 from compiler.utils.error_handler import ErrorHandler
@@ -628,6 +630,13 @@ class PythonSubsetLowerer:
                 return None
             return DictCompExpr(span=self._span(node), key=key, value=value, generators=generators)
 
+        if isinstance(node, ast.GeneratorExp):
+            element = self._lower_expr(node.elt)
+            generators = self._lower_comprehensions(node.generators)
+            if element is None or generators is None:
+                return None
+            return GeneratorExpr(span=self._span(node), element=element, generators=generators)
+
         if isinstance(node, ast.Subscript):
             collection = self._lower_expr(node.value)
             if isinstance(node.slice, ast.Slice):
@@ -703,8 +712,10 @@ class PythonSubsetLowerer:
             return YieldExpr(span=self._span(node), value=value)
 
         if isinstance(node, ast.YieldFrom):
-            self._unsupported(node, "yield from is not supported yet")
-            return None
+            value = self._lower_expr(node.value)
+            if value is None:
+                return None
+            return YieldFromExpr(span=self._span(node), value=value)
 
         self._unsupported(node, f"expression {type(node).__name__} is not supported")
         return None

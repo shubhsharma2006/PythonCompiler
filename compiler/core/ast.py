@@ -340,6 +340,12 @@ class DictCompExpr(Expression):
 
 
 @dataclass
+class GeneratorExpr(Expression):
+    element: Expression
+    generators: list[Comprehension]
+
+
+@dataclass
 class IndexExpr(Expression):
     collection: Expression
     index: Expression

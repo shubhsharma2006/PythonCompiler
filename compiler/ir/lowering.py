@@ -355,15 +355,36 @@ class CFGLowering:
         if isinstance(statement, TryStmt):
             handler_block = self._new_block("except")
             merge_block = self._new_block("try_merge")
+            final_block = self._new_block("try_finally") if statement.finalbody else None
+            orelse_block = self._new_block("try_orelse") if statement.orelse else None
             outer_target = self.exception_target_stack[-1] if self.exception_target_stack else None
 
+            # During the try body, exceptions should dispatch to the handler_block
             self.exception_target_stack.append(handler_block.name)
             for child in statement.body:
                 self._emit_statement(child)
+            # Normal fallthrough: run orelse (if present) then final, otherwise go to final or merge
             if self.current_block.terminator is None:
-                self._terminate(JumpTerminator(merge_block.name))
+                if orelse_block is not None:
+                    self._terminate(JumpTerminator(orelse_block.name))
+                elif final_block is not None:
+                    self._terminate(JumpTerminator(final_block.name))
+                else:
+                    self._terminate(JumpTerminator(merge_block.name))
             self.exception_target_stack.pop()
 
+            # Emit orelse body which then goes to final (if final exists) or merge
+            if orelse_block is not None:
+                self._switch_to(orelse_block)
+                for child in statement.orelse:
+                    self._emit_statement(child)
+                if self.current_block.terminator is None:
+                    if final_block is not None:
+                        self._terminate(JumpTerminator(final_block.name))
+                    else:
+                        self._terminate(JumpTerminator(merge_block.name))
+
+            # Dispatch handlers. If a handler matches, run it then go to final (if present) or merge.
             dispatch_block = handler_block
             next_dispatch = None
 
@@ -393,19 +414,43 @@ class CFGLowering:
                 for child in handler.body:
                     self._emit_statement(child)
                 if self.current_block.terminator is None:
-                    self._terminate(JumpTerminator(merge_block.name))
+                    if final_block is not None:
+                        self._terminate(JumpTerminator(final_block.name))
+                    else:
+                        self._terminate(JumpTerminator(merge_block.name))
 
                 if next_dispatch is None:
                     dispatch_block = None
                     break
                 dispatch_block = next_dispatch
 
+            # If no handler matched, run final (if present) then propagate to outer_target; otherwise re-raise
             if dispatch_block is not None:
                 self._switch_to(dispatch_block)
                 if self.current_block.terminator is None:
-                    if outer_target:
-                        self._terminate(JumpTerminator(outer_target))
+                    if final_block is not None:
+                        self._terminate(JumpTerminator(final_block.name))
                     else:
+                        if outer_target:
+                            self._terminate(JumpTerminator(outer_target))
+                        else:
+                            self._terminate(ReturnTerminator(None))
+
+            # Emit finalbody: run finalbody, then either propagate active error or continue to merge
+            if final_block is not None:
+                self._switch_to(final_block)
+                for child in statement.finalbody:
+                    self._emit_statement(child)
+                # After finalbody, emit an explicit py_error_occurred check to decide whether to propagate
+                if self.current_block.terminator is None:
+                    error_check = self._new_temp(ValueType.BOOL)
+                    self._emit(Call(error_check, "py_error_occurred", [], ValueType.BOOL))
+                    if outer_target:
+                        self._terminate(BranchTerminator(error_check, outer_target, merge_block.name))
+                    else:
+                        error_block = self._new_block("try_finally_error")
+                        self._terminate(BranchTerminator(error_check, error_block.name, merge_block.name))
+                        self._switch_to(error_block)
                         self._terminate(ReturnTerminator(None))
 
             self._switch_to(merge_block)

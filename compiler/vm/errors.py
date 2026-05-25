@@ -22,3 +22,9 @@ class YieldSignal(Exception):
     def __init__(self, value):
         super().__init__()
         self.value = value
+
+
+class JumpSignal(Exception):
+    def __init__(self, target: int):
+        super().__init__()
+        self.target = target

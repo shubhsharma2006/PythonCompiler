@@ -300,6 +300,122 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["cleanup", "handled"])
 
+    def test_execute_source_try_except_else_finally_normal_path(self):
+        result, run_output, rendered = self.execute_program(
+            "def f():\n"
+            "    try:\n"
+            "        print(\"try\")\n"
+            "    except ValueError:\n"
+            "        print(\"except\")\n"
+            "    else:\n"
+            "        print(\"else\")\n"
+            "    finally:\n"
+            "        print(\"finally\")\n\n"
+            "f()\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["try", "else", "finally"])
+
+    def test_execute_source_exception_path_runs_finally(self):
+        result, run_output, rendered = self.execute_program(
+            "def f():\n"
+            "    try:\n"
+            "        print(\"try\")\n"
+            "        raise ValueError(\"boom\")\n"
+            "    except ValueError:\n"
+            "        print(\"except\")\n"
+            "    finally:\n"
+            "        print(\"finally\")\n\n"
+            "f()\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["try", "except", "finally"])
+
+    def test_execute_source_nested_finally_inside_except(self):
+        result, run_output, rendered = self.execute_program(
+            "def f():\n"
+            "    try:\n"
+            "        raise ValueError()\n"
+            "    except ValueError:\n"
+            "        try:\n"
+            "            print(\"inner try\")\n"
+            "        finally:\n"
+            "            print(\"inner finally\")\n"
+            "    finally:\n"
+            "        print(\"outer finally\")\n\n"
+            "f()\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["inner try", "inner finally", "outer finally"])
+
+    def test_execute_source_try_finally_return_override(self):
+        result, run_output, rendered = self.execute_program(
+            "def f():\n"
+            "    try:\n"
+            "        return 1\n"
+            "    finally:\n"
+            "        return 2\n\n"
+            "print(f())\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["2"])
+
+    def test_execute_source_try_finally_break(self):
+        result, run_output, rendered = self.execute_program(
+            "for i in range(3):\n"
+            "    try:\n"
+            "        print(i)\n"
+            "        break\n"
+            "    finally:\n"
+            "        print(\"cleanup\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["0", "cleanup"])
+
+    def test_execute_source_try_finally_continue(self):
+        result, run_output, rendered = self.execute_program(
+            "for i in range(2):\n"
+            "    try:\n"
+            "        print(i)\n"
+            "        continue\n"
+            "    finally:\n"
+            "        print(\"finally\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["0", "finally", "1", "finally"])
+
+    def test_execute_source_exception_in_finally(self):
+        result, run_output, rendered = self.execute_program(
+            "def f():\n"
+            "    try:\n"
+            "        print(\"try\")\n"
+            "    finally:\n"
+            "        print(\"finally\")\n"
+            "        raise ValueError()\n\n"
+            "try:\n"
+            "    f()\n"
+            "except ValueError:\n"
+            "    print(\"caught\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["try", "finally", "caught"])
+
+    def test_execute_source_nested_reraise(self):
+        result, run_output, rendered = self.execute_program(
+            "def f():\n"
+            "    try:\n"
+            "        raise ValueError()\n"
+            "    except ValueError:\n"
+            "        print(\"inner\")\n"
+            "        raise\n\n"
+            "try:\n"
+            "    f()\n"
+            "except ValueError:\n"
+            "    print(\"outer\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["inner", "outer"])
+
     def test_execute_source_supports_for_range(self):
         result, run_output, rendered = self.execute_program(
             "for i in range(1, 4):\n"
@@ -749,6 +865,130 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["1"])
 
+    def test_native_rejects_try_except_else_finally(self):
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        print(\"try\")\n"
+            "    except Exception:\n"
+            "        print(\"except\")\n"
+            "    else:\n"
+            "        print(\"else\")\n"
+            "    finally:\n"
+            "        print(\"finally\")\n\n"
+            "f()\n"
+        )
+        result, _, _, rendered, _, _, _, _ = self.compile_program(source, run=False)
+        self.assertFalse(result.success)
+        self.assertIn("try/except or try/finally without else", rendered)
+
+    def test_native_exception_path_runs_finally(self):
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        print(\"try\")\n"
+            "        raise \"boom\"\n"
+            "    except Exception:\n"
+            "        print(\"except\")\n"
+            "    finally:\n"
+            "        print(\"finally\")\n\n"
+            "f()\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["try", "except", "finally"])
+
+    def test_native_nested_finally_inside_except(self):
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        raise \"boom\"\n"
+            "    except Exception:\n"
+            "        try:\n"
+            "            print(\"inner try\")\n"
+            "        finally:\n"
+            "            print(\"inner finally\")\n"
+            "    finally:\n"
+            "        print(\"outer finally\")\n\n"
+            "f()\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["inner try", "inner finally", "outer finally"])
+
+    def test_native_try_finally_return_override(self):
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        return 1\n"
+            "    finally:\n"
+            "        return 2\n\n"
+            "print(f())\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["2"])
+
+    def test_native_try_finally_break(self):
+        source = (
+            "for i in range(3):\n"
+            "    try:\n"
+            "        print(i)\n"
+            "        break\n"
+            "    finally:\n"
+            "        print(\"cleanup\")\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["0", "cleanup"])
+
+    def test_native_try_finally_continue(self):
+        source = (
+            "for i in range(2):\n"
+            "    try:\n"
+            "        print(i)\n"
+            "        continue\n"
+            "    finally:\n"
+            "        print(\"finally\")\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["0", "finally", "1", "finally"])
+
+    def test_native_exception_in_finally(self):
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        print(\"try\")\n"
+            "    finally:\n"
+            "        print(\"finally\")\n"
+            "        raise \"boom\"\n\n"
+            "try:\n"
+            "    f()\n"
+            "except Exception:\n"
+            "    print(\"caught\")\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["try", "finally", "caught"])
+
+    def test_native_nested_reraise(self):
+        source = (
+            "def f():\n"
+            "    try:\n"
+            "        raise \"boom\"\n"
+            "    except Exception:\n"
+            "        print(\"inner\")\n"
+            "        raise\n\n"
+            "try:\n"
+            "    f()\n"
+            "except Exception:\n"
+            "    print(\"outer\")\n"
+        )
+        result, _, run_output, rendered, _, _, _, _ = self.compile_program(source, run=True)
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["inner", "outer"])
+
     def test_wrong_argument_count_fails(self):
         source = (
             "def add(a, b):\n"
@@ -815,6 +1055,36 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(result.success, rendered)
         self.assertEqual(run_output.strip().splitlines(), ["0", "1", "2"])
+
+    def test_execute_source_supports_generator_expressions(self):
+        result, run_output, rendered = self.execute_program(
+            "base = 10\n"
+            "g = (base + x for x in [1, 2, 3] if x > 1)\n"
+            "print(next(g))\n"
+            "print(next(g))\n"
+            "try:\n"
+            "    next(g)\n"
+            "except StopIteration:\n"
+            "    print(\"done\")\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["12", "13", "done"])
+
+    def test_execute_source_supports_yield_from(self):
+        result, run_output, rendered = self.execute_program(
+            "def inner():\n"
+            "    yield 1\n"
+            "    yield 2\n\n"
+            "def outer():\n"
+            "    yield 0\n"
+            "    result = yield from inner()\n"
+            "    print(result is None)\n"
+            "    yield 3\n\n"
+            "for value in outer():\n"
+            "    print(value)\n"
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertEqual(run_output.strip().splitlines(), ["0", "1", "2", "True", "3"])
 
     def test_compile_source_rejects_generators_for_native_path(self):
         result, _, _, rendered, _, _, _, _ = self.compile_program(
