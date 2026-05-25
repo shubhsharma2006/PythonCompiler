@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from compiler.core.ast import (
     AssignStmt,
     BinaryExpr,
@@ -43,6 +45,28 @@ from compiler.ir.ownership import OwnerKind, default_value_info
 from compiler.semantic import SemanticModel
 
 
+@dataclass
+class _FinallyContext:
+    block_name: str
+    normal_target: str
+    action_var: str
+    return_var: str | None
+    action_targets: dict[int, tuple[str, str | None]] = field(default_factory=dict)
+    action_codes: dict[tuple[str, str | None], int] = field(default_factory=dict)
+    next_action_code: int = 1
+
+    def code_for(self, kind: str, target: str | None = None) -> int:
+        key = (kind, target)
+        existing = self.action_codes.get(key)
+        if existing is not None:
+            return existing
+        code = self.next_action_code
+        self.next_action_code += 1
+        self.action_codes[key] = code
+        self.action_targets[code] = key
+        return code
+
+
 class CFGLowering:
     def __init__(self, semantic: SemanticModel):
         self.semantic = semantic
@@ -52,6 +76,7 @@ class CFGLowering:
         self.current_block: BasicBlock | None = None
         self.loop_stack: list[tuple[str, str]] = []
         self.exception_target_stack: list[str] = []
+        self.finally_stack: list[_FinallyContext] = []
 
     def generate(self, program: Program) -> CFGModule:
         main_function = self._new_function("main", [], ValueType.INT)
@@ -277,6 +302,7 @@ class CFGLowering:
 
             cond_block = self._new_block("for_cond")
             body_block = self._new_block("for_body")
+            step_block = self._new_block("for_step")
             if statement.orelse:
                 orelse_block = self._new_block("for_else")
                 exit_block = self._new_block("for_exit")
@@ -295,11 +321,14 @@ class CFGLowering:
             self._terminate(BranchTerminator(cond_temp, body_block.name, false_target))
 
             self._switch_to(body_block)
-            self.loop_stack.append((cond_block.name, break_target))
+            self.loop_stack.append((step_block.name, break_target))
             for child in statement.body:
                 self._emit_statement(child)
             self.loop_stack.pop()
+            if self.current_block.terminator is None:
+                self._terminate(JumpTerminator(step_block.name))
 
+            self._switch_to(step_block)
             if len(range_args) == 3:
                 step_name, _ = self._emit_expr(range_args[2])
             else:
@@ -323,17 +352,17 @@ class CFGLowering:
 
         if isinstance(statement, BreakStmt):
             if self.loop_stack:
-                self._terminate(JumpTerminator(self.loop_stack[-1][1]))
+                self._emit_control_transfer("break", target=self.loop_stack[-1][1])
             return
 
         if isinstance(statement, ContinueStmt):
             if self.loop_stack:
-                self._terminate(JumpTerminator(self.loop_stack[-1][0]))
+                self._emit_control_transfer("continue", target=self.loop_stack[-1][0])
             return
 
         if isinstance(statement, ReturnStmt):
             value_name = None if statement.value is None else self._emit_expr(statement.value)[0]
-            self._terminate(ReturnTerminator(value_name))
+            self._emit_control_transfer("return", value_name=value_name)
             return
 
         if isinstance(statement, RaiseStmt):
@@ -358,8 +387,11 @@ class CFGLowering:
             final_block = self._new_block("try_finally") if statement.finalbody else None
             orelse_block = self._new_block("try_orelse") if statement.orelse else None
             outer_target = self.exception_target_stack[-1] if self.exception_target_stack else None
+            final_context = self._make_finally_context(final_block.name, merge_block.name) if final_block is not None else None
 
             # During the try body, exceptions should dispatch to the handler_block
+            if final_context is not None:
+                self.finally_stack.append(final_context)
             self.exception_target_stack.append(handler_block.name)
             for child in statement.body:
                 self._emit_statement(child)
@@ -368,7 +400,7 @@ class CFGLowering:
                 if orelse_block is not None:
                     self._terminate(JumpTerminator(orelse_block.name))
                 elif final_block is not None:
-                    self._terminate(JumpTerminator(final_block.name))
+                    self._emit_normal_finally_jump(final_context)
                 else:
                     self._terminate(JumpTerminator(merge_block.name))
             self.exception_target_stack.pop()
@@ -380,7 +412,7 @@ class CFGLowering:
                     self._emit_statement(child)
                 if self.current_block.terminator is None:
                     if final_block is not None:
-                        self._terminate(JumpTerminator(final_block.name))
+                        self._emit_normal_finally_jump(final_context)
                     else:
                         self._terminate(JumpTerminator(merge_block.name))
 
@@ -415,7 +447,7 @@ class CFGLowering:
                     self._emit_statement(child)
                 if self.current_block.terminator is None:
                     if final_block is not None:
-                        self._terminate(JumpTerminator(final_block.name))
+                        self._emit_normal_finally_jump(final_context)
                     else:
                         self._terminate(JumpTerminator(merge_block.name))
 
@@ -438,6 +470,8 @@ class CFGLowering:
 
             # Emit finalbody: run finalbody, then either propagate active error or continue to merge
             if final_block is not None:
+                assert final_context is not None
+                self.finally_stack.pop()
                 self._switch_to(final_block)
                 for child in statement.finalbody:
                     self._emit_statement(child)
@@ -445,13 +479,21 @@ class CFGLowering:
                 if self.current_block.terminator is None:
                     error_check = self._new_temp(ValueType.BOOL)
                     self._emit(Call(error_check, "py_error_occurred", [], ValueType.BOOL))
+                    dispatch_block = None
+                    success_target = merge_block.name
+                    if final_context.action_targets:
+                        dispatch_block = self._new_block("finally_dispatch")
+                        success_target = dispatch_block.name
                     if outer_target:
-                        self._terminate(BranchTerminator(error_check, outer_target, merge_block.name))
+                        self._terminate(BranchTerminator(error_check, outer_target, success_target))
                     else:
                         error_block = self._new_block("try_finally_error")
-                        self._terminate(BranchTerminator(error_check, error_block.name, merge_block.name))
+                        self._terminate(BranchTerminator(error_check, error_block.name, success_target))
                         self._switch_to(error_block)
                         self._terminate(ReturnTerminator(None))
+                    if dispatch_block is not None:
+                        self._switch_to(dispatch_block)
+                        self._emit_finally_dispatch(final_context)
 
             self._switch_to(merge_block)
             return
@@ -562,6 +604,78 @@ class CFGLowering:
         name = f"_t{self.temp_counter}"
         self.current_function.locals[name] = value_type
         return name
+
+    def _make_finally_context(self, block_name: str, normal_target: str) -> _FinallyContext:
+        action_var = self._new_temp(ValueType.INT)
+        return_var = None
+        if self.current_function.return_type != ValueType.VOID:
+            return_var = self._new_temp(self.current_function.return_type)
+        return _FinallyContext(
+            block_name=block_name,
+            normal_target=normal_target,
+            action_var=action_var,
+            return_var=return_var,
+        )
+
+    def _emit_assign_const(self, target: str, value: object, value_type: ValueType) -> None:
+        temp = self._new_temp(value_type)
+        self._emit(LoadConst(temp, value, value_type))
+        self._emit(Assign(target, temp))
+
+    def _emit_normal_finally_jump(self, context: _FinallyContext | None) -> None:
+        if context is None:
+            return
+        self._emit_assign_const(context.action_var, 0, ValueType.INT)
+        self._terminate(JumpTerminator(context.block_name))
+
+    def _emit_control_transfer(
+        self,
+        kind: str,
+        *,
+        target: str | None = None,
+        value_name: str | None = None,
+    ) -> None:
+        if self.finally_stack:
+            context = self.finally_stack[-1]
+            code = context.code_for(kind, target)
+            self._emit_assign_const(context.action_var, code, ValueType.INT)
+            if kind == "return" and context.return_var is not None and value_name is not None:
+                self._emit(Assign(context.return_var, value_name))
+            self._terminate(JumpTerminator(context.block_name))
+            return
+
+        if kind in {"break", "continue"}:
+            assert target is not None
+            self._terminate(JumpTerminator(target))
+            return
+
+        self._terminate(ReturnTerminator(value_name))
+
+    def _emit_finally_dispatch(self, context: _FinallyContext) -> None:
+        actions = sorted(context.action_targets.items())
+        if not actions:
+            self._terminate(JumpTerminator(context.normal_target))
+            return
+
+        for index, (code, (kind, target)) in enumerate(actions):
+            action_block = self._new_block("finally_action")
+            next_check = self._new_block("finally_dispatch_next") if index < len(actions) - 1 else None
+            code_temp = self._new_temp(ValueType.INT)
+            self._emit(LoadConst(code_temp, code, ValueType.INT))
+            match_temp = self._new_temp(ValueType.BOOL)
+            self._emit(BinaryOp(match_temp, "==", context.action_var, code_temp, ValueType.BOOL))
+            false_target = next_check.name if next_check is not None else context.normal_target
+            self._terminate(BranchTerminator(match_temp, action_block.name, false_target))
+
+            self._switch_to(action_block)
+            if kind == "return":
+                self._emit_control_transfer("return", value_name=context.return_var)
+            else:
+                self._emit_control_transfer(kind, target=target)
+
+            if next_check is None:
+                return
+            self._switch_to(next_check)
 
     def _runtime_type(self, expr) -> ValueType:
         if isinstance(expr, NameExpr):

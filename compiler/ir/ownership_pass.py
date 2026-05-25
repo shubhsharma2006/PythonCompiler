@@ -92,12 +92,18 @@ class OwnershipDecrefPlacement:
     @staticmethod
     def _compute_postdom_depths(idoms: dict[str, str | None]) -> dict[str, int]:
         depth: dict[str, int] = {}
+        visiting: set[str] = set()
 
         def walk(node: str) -> int:
             if node in depth:
                 return depth[node]
+            if node in visiting:
+                depth[node] = 0
+                return depth[node]
+            visiting.add(node)
             parent = idoms.get(node)
             depth[node] = 0 if parent is None else walk(parent) + 1
+            visiting.discard(node)
             return depth[node]
 
         for node in idoms:
