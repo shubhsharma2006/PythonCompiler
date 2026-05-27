@@ -81,6 +81,13 @@ class AttributeAssignStmt(Statement):
 
 
 @dataclass
+class IndexAssignStmt(Statement):
+    collection: Expression
+    index: Expression
+    value: Expression
+
+
+@dataclass
 class UnpackAssignStmt(Statement):
     targets: list[str]
     value: Expression

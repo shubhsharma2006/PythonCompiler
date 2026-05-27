@@ -84,6 +84,8 @@ const char *py_str_identity(const char *value);
 
 /* String operations */
 const char *py_str_concat(const char *a, const char *b);
+int py_len_str(const char *value);
+int py_len_str(const char *value);
 
 /* Arithmetic helpers */
 int py_floor_div_int(int a, int b);

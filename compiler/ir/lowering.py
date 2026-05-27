@@ -14,13 +14,18 @@ from compiler.core.ast import (
     FunctionDef,
     IfStmt,
     IfExpr,
+    IndexExpr,
+    IndexAssignStmt,
     NameExpr,
     LambdaExpr,
+    ListExpr,
     PrintStmt,
     Program,
     RaiseStmt,
     ReturnStmt,
     TryStmt,
+    TupleExpr,
+    SliceExpr,
     UnaryExpr,
     WhileStmt,
     BreakStmt,
@@ -191,6 +196,28 @@ class CFGLowering:
         if isinstance(statement, AssignStmt):
             value_name, _ = self._emit_expr(statement.value)
             self._emit(Assign(statement.name, value_name))
+            return
+
+        if isinstance(statement, IndexAssignStmt):
+            collection_name, collection_type = self._emit_expr(statement.collection)
+            index_name, _ = self._emit_expr(statement.index)
+            value_name, value_type = self._emit_expr(statement.value)
+            if collection_type == ValueType.LIST:
+                elem_type = self._index_elem_type(statement.collection)
+                if elem_type == ValueType.UNKNOWN:
+                    elem_type = value_type
+                suffix = self._container_suffix(elem_type)
+                exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+                self._emit(
+                    Call(
+                        None,
+                        f"py_list_set_{suffix}",
+                        [collection_name, index_name, value_name],
+                        ValueType.VOID,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
             return
 
         if isinstance(statement, PrintStmt):
@@ -553,6 +580,82 @@ class CFGLowering:
             self._emit(BinaryOp(temp, expr.op, left_name, right_name, value_type))
             return temp, value_type
 
+        if isinstance(expr, ListExpr):
+            element_names: list[str] = []
+            element_types: list[ValueType] = []
+            for element in expr.elements:
+                name, elem_type = self._emit_expr(element)
+                element_names.append(name)
+                element_types.append(elem_type)
+            elem_type = element_types[0] if element_types else ValueType.INT
+            suffix = self._container_suffix(elem_type)
+            size_temp = self._new_temp(ValueType.INT)
+            self._emit(LoadConst(size_temp, len(element_names), ValueType.INT))
+            target = self._new_temp(ValueType.LIST)
+            exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+            self._emit(
+                Call(
+                    target,
+                    f"py_list_new_{suffix}",
+                    [size_temp],
+                    ValueType.LIST,
+                    can_raise=True,
+                    exception_target=exception_target,
+                )
+            )
+            for index, element_name in enumerate(element_names):
+                index_temp = self._new_temp(ValueType.INT)
+                self._emit(LoadConst(index_temp, index, ValueType.INT))
+                self._emit(
+                    Call(
+                        None,
+                        f"py_list_set_{suffix}",
+                        [target, index_temp, element_name],
+                        ValueType.VOID,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
+            return target, ValueType.LIST
+
+        if isinstance(expr, TupleExpr):
+            element_names: list[str] = []
+            element_types: list[ValueType] = []
+            for element in expr.elements:
+                name, elem_type = self._emit_expr(element)
+                element_names.append(name)
+                element_types.append(elem_type)
+            elem_type = element_types[0] if element_types else ValueType.INT
+            suffix = self._container_suffix(elem_type)
+            size_temp = self._new_temp(ValueType.INT)
+            self._emit(LoadConst(size_temp, len(element_names), ValueType.INT))
+            target = self._new_temp(ValueType.TUPLE)
+            exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+            self._emit(
+                Call(
+                    target,
+                    f"py_tuple_new_{suffix}",
+                    [size_temp],
+                    ValueType.TUPLE,
+                    can_raise=True,
+                    exception_target=exception_target,
+                )
+            )
+            for index, element_name in enumerate(element_names):
+                index_temp = self._new_temp(ValueType.INT)
+                self._emit(LoadConst(index_temp, index, ValueType.INT))
+                self._emit(
+                    Call(
+                        None,
+                        f"py_tuple_set_{suffix}",
+                        [target, index_temp, element_name],
+                        ValueType.VOID,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
+            return target, ValueType.TUPLE
+
         if isinstance(expr, CompareExpr):
             left_name, _ = self._emit_expr(expr.left)
             right_name, _ = self._emit_expr(expr.right)
@@ -563,7 +666,88 @@ class CFGLowering:
         if isinstance(expr, BoolOpExpr):
             return self._emit_short_circuit(expr)
 
+        if isinstance(expr, IndexExpr):
+            collection_name, collection_type = self._emit_expr(expr.collection)
+            exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+            if isinstance(expr.index, SliceExpr) and collection_type == ValueType.STRING:
+                start_name, has_start = self._emit_slice_part(expr.index.lower)
+                end_name, has_end = self._emit_slice_part(expr.index.upper)
+                has_start_name = self._new_temp(ValueType.INT)
+                has_end_name = self._new_temp(ValueType.INT)
+                self._emit(LoadConst(has_start_name, has_start, ValueType.INT))
+                self._emit(LoadConst(has_end_name, has_end, ValueType.INT))
+                target = self._new_temp(ValueType.STRING)
+                self._emit(
+                    Call(
+                        target,
+                        "py_str_slice",
+                        [collection_name, start_name, end_name, has_start_name, has_end_name],
+                        ValueType.STRING,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
+                return target, ValueType.STRING
+            index_name, _ = self._emit_expr(expr.index)
+            if collection_type == ValueType.LIST:
+                elem_type = self._index_elem_type(expr.collection)
+                suffix = self._container_suffix(elem_type)
+                target = self._new_temp(elem_type)
+                self._emit(
+                    Call(
+                        target,
+                        f"py_list_get_{suffix}",
+                        [collection_name, index_name],
+                        elem_type,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
+                return target, elem_type
+            if collection_type == ValueType.TUPLE:
+                elem_type = self._index_elem_type(expr.collection)
+                suffix = self._container_suffix(elem_type)
+                target = self._new_temp(elem_type)
+                self._emit(
+                    Call(
+                        target,
+                        f"py_tuple_get_{suffix}",
+                        [collection_name, index_name],
+                        elem_type,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
+                return target, elem_type
+            if collection_type == ValueType.STRING:
+                target = self._new_temp(ValueType.STRING)
+                self._emit(
+                    Call(
+                        target,
+                        "py_str_get_index",
+                        [collection_name, index_name],
+                        ValueType.STRING,
+                        can_raise=True,
+                        exception_target=exception_target,
+                    )
+                )
+                return target, ValueType.STRING
+            return "0", ValueType.UNKNOWN
+
         if isinstance(expr, CallExpr):
+            if expr.func_name == "len" and expr.args:
+                arg_name, arg_type = self._emit_expr(expr.args[0])
+                target = None if discard_result else self._new_temp(ValueType.INT)
+                exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+                if arg_type == ValueType.LIST:
+                    func_name = "py_list_len"
+                elif arg_type == ValueType.TUPLE:
+                    func_name = "py_tuple_len"
+                else:
+                    func_name = "py_len_str"
+                self._emit(Call(target, func_name, [arg_name], ValueType.INT, can_raise=False, exception_target=exception_target))
+                return target or "0", ValueType.INT
+
             args = [self._emit_expr(arg)[0] for arg in expr.args]
             value_type = self._runtime_type(expr)
             target = None if discard_result or value_type == ValueType.VOID else self._new_temp(value_type)
@@ -715,3 +899,26 @@ class CFGLowering:
             return self.semantic.functions[expr.func_name].return_type
 
         return self.semantic.expr_type(expr)
+
+    @staticmethod
+    def _container_suffix(value_type: ValueType) -> str:
+        if value_type == ValueType.FLOAT:
+            return "float"
+        if value_type == ValueType.BOOL:
+            return "bool"
+        if value_type == ValueType.STRING:
+            return "str"
+        return "int"
+
+    def _index_elem_type(self, collection_expr) -> ValueType:
+        if isinstance(collection_expr, NameExpr):
+            return self.semantic.container_var_elem_types.get(collection_expr.name, ValueType.UNKNOWN)
+        return self.semantic.container_elem_types.get(id(collection_expr), ValueType.UNKNOWN)
+
+    def _emit_slice_part(self, expr) -> tuple[str, int]:
+        if expr is None:
+            temp = self._new_temp(ValueType.INT)
+            self._emit(LoadConst(temp, 0, ValueType.INT))
+            return temp, 0
+        name, _ = self._emit_expr(expr)
+        return name, 1

@@ -79,6 +79,8 @@ class SemanticModel:
     globals: dict[str, ValueType]
     functions: dict[str, FunctionType]
     expr_types: dict[int, ValueType]
+    container_elem_types: dict[int, ValueType]
+    container_var_elem_types: dict[str, ValueType]
 
     def expr_type(self, expr) -> ValueType:
         if isinstance(expr, CallExpr) and expr.func_name in self.functions:

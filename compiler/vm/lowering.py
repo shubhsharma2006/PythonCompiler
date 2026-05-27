@@ -3,6 +3,7 @@ from __future__ import annotations
 from compiler.core.ast import (
     AssignStmt,
     AttributeAssignStmt,
+    IndexAssignStmt,
     AttributeExpr,
     BinaryExpr,
     BoolOpExpr,
@@ -320,6 +321,14 @@ class BytecodeLowerer:
                     statement.attr_name,
                 )
             )
+            return
+
+        if isinstance(statement, IndexAssignStmt):
+            self._emit_expr(statement.collection, instructions)
+            self._emit_expr(statement.index, instructions)
+            self._emit_expr(statement.value, instructions)
+
+            instructions.append(Instruction("STORE_SUBSCR"))
             return
 
         if isinstance(statement, PassStmt):

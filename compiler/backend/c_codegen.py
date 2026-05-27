@@ -57,6 +57,7 @@ class CCodeGenerator:
     def _emit_main(self, function: IRFunction) -> list[str]:
         lines = ["int main(void) {"]
         lines.append("    py_clear_error();")
+        lines.append("    py_runtime_init();")
 
         if function.return_type != ValueType.VOID:
             lines.append(
@@ -129,7 +130,7 @@ class CCodeGenerator:
             for instruction in block.instructions:
 
                 if isinstance(instruction, LoadConst):
-                    if instruction.value_type == ValueType.STRING:
+                    if self.runtime.is_refcounted(instruction.value_type):
                         lines.append(
                             f"    py_decref({instruction.target});"
                         )
@@ -137,20 +138,21 @@ class CCodeGenerator:
                         f"    {instruction.target} = "
                         f"{self._literal(instruction.value, instruction.value_type)};"
                     )
-                    if instruction.value_type == ValueType.STRING:
+                    if self.runtime.is_refcounted(instruction.value_type):
                         lines.append(
                             f"    py_incref({instruction.target});"
                         )
 
                 elif isinstance(instruction, Assign):
-                    if type_map.get(instruction.target) == ValueType.STRING:
+                    target_type = type_map.get(instruction.target, ValueType.UNKNOWN)
+                    if self.runtime.is_refcounted(target_type):
                         lines.append(
                             f"    py_decref({instruction.target});"
                         )
                     lines.append(
                         f"    {instruction.target} = {instruction.source};"
                     )
-                    if type_map.get(instruction.target) == ValueType.STRING:
+                    if self.runtime.is_refcounted(target_type):
                         lines.append(
                             f"    py_incref({instruction.target});"
                         )
@@ -246,10 +248,11 @@ class CCodeGenerator:
                     call_text = self._emit_call(instruction, type_map)
 
                     if instruction.target is None:
-                        if instruction.value_type == ValueType.STRING:
+                        if self.runtime.is_refcounted(instruction.value_type):
                             temp_name = self._next_temp()
+                            c_type = c_type_name(instruction.value_type)
                             lines.append(
-                                f"    const char *{temp_name} = {call_text};"
+                                f"    {c_type} {temp_name} = {call_text};"
                             )
                             lines.append(
                                 f"    py_decref({temp_name});"
@@ -257,7 +260,7 @@ class CCodeGenerator:
                         else:
                             lines.append(f"    {call_text};")
                     else:
-                        if type_map.get(instruction.target) == ValueType.STRING:
+                        if self.runtime.is_refcounted(type_map.get(instruction.target, ValueType.UNKNOWN)):
                             lines.append(
                                 f"    py_decref({instruction.target});"
                             )
@@ -316,7 +319,7 @@ class CCodeGenerator:
                     lines.append("    goto cleanup;")
                 else:
                     ret_type = type_map.get(terminator.value, ValueType.UNKNOWN)
-                    if ret_type == ValueType.STRING:
+                    if self.runtime.is_refcounted(ret_type):
                         lines.append(
                             f"    py_incref({terminator.value});"
                         )
@@ -374,7 +377,7 @@ class CCodeGenerator:
         for name, value_type in sorted(function.locals.items(), reverse=True):
             if name in params:
                 continue
-            if value_type == ValueType.STRING:
+            if self.runtime.is_refcounted(value_type):
                 info = function.ownership.get(name) if hasattr(function, "ownership") else None
                 if info is not None and not info.cleanup_required:
                     continue

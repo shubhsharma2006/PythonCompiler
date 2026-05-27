@@ -28,6 +28,7 @@ from compiler.core.ast import (
     IfStmt,
     IfExpr,
     ImportStmt,
+    IndexAssignStmt,
     IndexExpr,
     LambdaExpr,
     ListExpr,
@@ -142,13 +143,19 @@ class PythonSubsetLowerer:
                     targets=[element.id for element in target.elts],
                     value=value,
                 )
-            self._unsupported(node, "only simple name or attribute assignment is supported")
+            if isinstance(target, ast.Subscript):
+                collection = self._lower_expr(target.value)
+                if isinstance(target.slice, ast.Slice):
+                    index = self._lower_slice(target.slice)
+                else:
+                    index = self._lower_expr(target.slice)
+                if collection is None or index is None:
+                    return None
+                return IndexAssignStmt(span=self._span(node), collection=collection, index=index, value=value)
+            self._unsupported(node, "only simple name, attribute, or subscript assignment is supported")
             return None
 
         if isinstance(node, ast.AugAssign):
-            if not isinstance(node.target, ast.Name):
-                self._unsupported(node, "only simple name augmented assignment is supported")
-                return None
             operator = self._binop_symbol(node.op)
             if operator is None:
                 self._unsupported(node, "unsupported augmented assignment operator")
@@ -156,9 +163,31 @@ class PythonSubsetLowerer:
             right = self._lower_expr(node.value)
             if right is None:
                 return None
-            left = NameExpr(span=self._span(node.target), name=node.target.id)
-            value = BinaryExpr(span=self._span(node), op=operator, left=left, right=right)
-            return AssignStmt(span=self._span(node), name=node.target.id, value=value)
+            target = node.target
+            if isinstance(target, ast.Name):
+                left = NameExpr(span=self._span(target), name=target.id)
+                value = BinaryExpr(span=self._span(node), op=operator, left=left, right=right)
+                return AssignStmt(span=self._span(node), name=target.id, value=value)
+            if isinstance(target, ast.Attribute):
+                obj = self._lower_expr(target.value)
+                if obj is None:
+                    return None
+                left = AttributeExpr(span=self._span(target), object=obj, attr_name=target.attr)
+                value = BinaryExpr(span=self._span(node), op=operator, left=left, right=right)
+                return AttributeAssignStmt(span=self._span(node), object=obj, attr_name=target.attr, value=value)
+            if isinstance(target, ast.Subscript):
+                collection = self._lower_expr(target.value)
+                if isinstance(target.slice, ast.Slice):
+                    index = self._lower_slice(target.slice)
+                else:
+                    index = self._lower_expr(target.slice)
+                if collection is None or index is None:
+                    return None
+                left = IndexExpr(span=self._span(target), collection=collection, index=index)
+                value = BinaryExpr(span=self._span(node), op=operator, left=left, right=right)
+                return IndexAssignStmt(span=self._span(node), collection=collection, index=index, value=value)
+            self._unsupported(node, "only name, attribute, or subscript augmented assignment is supported")
+            return None
 
         if isinstance(node, ast.Expr):
             if self._is_docstring(node):

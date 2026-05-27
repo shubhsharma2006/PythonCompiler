@@ -74,6 +74,10 @@ def c_type_name(value_type: ValueType) -> str:
         return "int"
     if value_type == ValueType.STRING:
         return "const char *"
+    if value_type == ValueType.LIST:
+        return "PyList *"
+    if value_type == ValueType.TUPLE:
+        return "PyTuple *"
     if value_type == ValueType.VOID:
         return "void"
     return "double"

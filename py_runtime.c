@@ -251,6 +251,10 @@ const char *py_str_concat(const char *a, const char *b) {
     return result;
 }
 
+int py_len_str(const char *value) {
+    return (int)strlen(value ? value : "");
+}
+
 int py_floor_div_int(int a, int b) {
     /* Python semantics: floor(a / b) for integers. */
     if (b == 0) {

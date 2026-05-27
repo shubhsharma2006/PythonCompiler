@@ -22,7 +22,7 @@ class SSAValueInfo:
 
 
 def default_value_info(name: str, value_type: ValueType, owner_kind: OwnerKind) -> SSAValueInfo:
-    refcounted = value_type == ValueType.STRING
+    refcounted = value_type in {ValueType.STRING, ValueType.LIST, ValueType.TUPLE}
     return SSAValueInfo(
         name=name,
         value_type=value_type,

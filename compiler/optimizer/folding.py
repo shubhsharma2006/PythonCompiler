@@ -3,6 +3,7 @@ from __future__ import annotations
 from compiler.core.ast import (
     AssignStmt,
     AttributeAssignStmt,
+    IndexAssignStmt,
     AttributeExpr,
     BinaryExpr,
     BoolOpExpr,
@@ -66,6 +67,10 @@ class ConstantFolder:
             statement.value = self._optimize_expr(statement.value)
         elif isinstance(statement, AttributeAssignStmt):
             statement.object = self._optimize_expr(statement.object)
+            statement.value = self._optimize_expr(statement.value)
+        elif isinstance(statement, IndexAssignStmt):
+            statement.collection = self._optimize_expr(statement.collection)
+            statement.index = self._optimize_expr(statement.index)
             statement.value = self._optimize_expr(statement.value)
         elif isinstance(statement, DeleteStmt):
             statement.targets = [self._optimize_expr(target) for target in statement.targets]

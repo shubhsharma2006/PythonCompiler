@@ -3,6 +3,7 @@ from __future__ import annotations
 from compiler.core.ast import (
     AssignStmt,
     AttributeAssignStmt,
+    IndexAssignStmt,
     AttributeExpr,
     BinaryExpr,
     BoolOpExpr,
@@ -78,6 +79,8 @@ class TypeChecker:
         self.errors = errors
         self.table: SymbolTable | None = None
         self.expr_types: dict[int, ValueType] = {}
+        self.container_elem_types: dict[int, ValueType] = {}
+        self.container_var_elem_types: dict[str, ValueType] = {}
         self.current_function: FunctionType | None = None
         self.local_functions: list[dict[str, FunctionType]] = []
 
@@ -153,6 +156,7 @@ class TypeChecker:
             self._define_name(scope, statement.name, merged)
             if self.current_function is not None:
                 self.current_function.local_types[statement.name] = merged
+            self._update_container_binding(statement.name, statement.value, scope)
             return
 
         if isinstance(statement, UnpackAssignStmt):
@@ -189,6 +193,24 @@ class TypeChecker:
                 self._error(statement.object, "cannot assign an attribute on a void value")
             if value_type == ValueType.VOID:
                 self._error(statement.value, "cannot assign a void value to an attribute")
+            return
+
+        if isinstance(statement, IndexAssignStmt):
+            collection_type = self._check_expr(statement.collection, scope)
+            index_type = self._check_expr(statement.index, scope)
+            value_type = self._check_expr(statement.value, scope)
+            if collection_type == ValueType.VOID:
+                self._error(statement.collection, "cannot assign into a void value")
+            if index_type == ValueType.VOID:
+                self._error(statement.index, "cannot index with a void value")
+            if value_type == ValueType.VOID:
+                self._error(statement.value, "cannot assign a void value to a subscript")
+            if isinstance(statement.collection, NameExpr) and collection_type == ValueType.LIST:
+                existing = self.container_var_elem_types.get(statement.collection.name, ValueType.UNKNOWN)
+                merged = merge_types(existing, value_type)
+                if merged is None:
+                    merged = ValueType.UNKNOWN
+                self.container_var_elem_types[statement.collection.name] = merged
             return
 
         if isinstance(statement, PassStmt):
@@ -566,17 +588,37 @@ class TypeChecker:
             return self._set_expr_type(expr, target.return_type)
 
         if isinstance(expr, ListExpr):
+            elem_type = ValueType.UNKNOWN
             for element in expr.elements:
                 element_type = self._check_expr(element, scope)
                 if element_type == ValueType.VOID:
                     self._error(element, "list elements cannot be void")
+                if elem_type == ValueType.UNKNOWN:
+                    elem_type = element_type
+                else:
+                    merged = merge_types(elem_type, element_type)
+                    if merged is None:
+                        elem_type = ValueType.UNKNOWN
+                    else:
+                        elem_type = merged
+            self.container_elem_types[id(expr)] = elem_type
             return self._set_expr_type(expr, ValueType.LIST)
 
         if isinstance(expr, TupleExpr):
+            elem_type = ValueType.UNKNOWN
             for element in expr.elements:
                 element_type = self._check_expr(element, scope)
                 if element_type == ValueType.VOID:
                     self._error(element, "tuple elements cannot be void")
+                if elem_type == ValueType.UNKNOWN:
+                    elem_type = element_type
+                else:
+                    merged = merge_types(elem_type, element_type)
+                    if merged is None:
+                        elem_type = ValueType.UNKNOWN
+                    else:
+                        elem_type = merged
+            self.container_elem_types[id(expr)] = elem_type
             return self._set_expr_type(expr, ValueType.TUPLE)
 
         if isinstance(expr, DictExpr):
@@ -701,6 +743,10 @@ class TypeChecker:
             if collection_type not in {ValueType.LIST, ValueType.TUPLE, ValueType.STRING, ValueType.DICT, ValueType.UNKNOWN}:
                 self._error(expr.collection, f"cannot index value of type {collection_type.value}")
             result_type = ValueType.STRING if collection_type == ValueType.STRING else ValueType.UNKNOWN
+            if collection_type in {ValueType.LIST, ValueType.TUPLE}:
+                elem_type = self._container_elem_type_for_expr(expr.collection, scope)
+                if elem_type is not None and elem_type != ValueType.UNKNOWN:
+                    result_type = elem_type
             return self._set_expr_type(expr, result_type)
 
         if isinstance(expr, SliceExpr):
@@ -1026,6 +1072,18 @@ class TypeChecker:
         if expr.func_name == "tuple":
             return self._set_expr_type(expr, ValueType.TUPLE)
         return self._set_expr_type(expr, ValueType.UNKNOWN)
+
+    def _container_elem_type_for_expr(self, expr, scope: Scope) -> ValueType | None:
+        if isinstance(expr, NameExpr):
+            return self.container_var_elem_types.get(expr.name)
+        return self.container_elem_types.get(id(expr))
+
+    def _update_container_binding(self, name: str, value, scope: Scope) -> None:
+        elem_type = self._container_elem_type_for_expr(value, scope)
+        if elem_type is None:
+            self.container_var_elem_types.pop(name, None)
+            return
+        self.container_var_elem_types[name] = elem_type
 
     @staticmethod
     def _is_range_call(expr) -> bool:

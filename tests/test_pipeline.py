@@ -716,6 +716,132 @@ class PipelineTests(unittest.TestCase):
             )
         self.assertTrue(result.success, result.errors.render())
 
+    def test_compile_source_supports_list_tuple_literals_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "items = [1, 2, 3]\n"
+                "pair = (4, 5)\n"
+                "print(1)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertTrue(result.success, result.errors.render())
+        self.assertIn("py_list_new_int", result.c_code)
+        self.assertIn("py_tuple_new_int", result.c_code)
+
+    def test_compile_source_rejects_mixed_type_list_literal_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "items = [1, \"two\"]\n"
+                "print(1)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn(
+            "native compilation only supports non-empty list/tuple literals",
+            result.errors.render(),
+        )
+
+    def test_compile_source_supports_list_tuple_indexing_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [10, 20, 30]\n"
+            "pair = (4, 5)\n"
+            "print(items[1])\n"
+            "print(pair[0])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_get_int", c_code)
+        self.assertIn("py_tuple_get_int", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["20", "4"])
+
+    def test_compile_source_supports_list_index_assignment_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [1, 2, 3]\n"
+            "items[1] = 9\n"
+            "print(items[1])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_set_int", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["9"])
+
+    def test_compile_source_supports_list_index_assignment_float_bool_for_native_path(self):
+        result, _, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "floats = [1.5, 2.5]\n"
+            "floats[0] = 3.25\n"
+            "flags = [True, False]\n"
+            "flags[1] = True\n"
+            "print(floats[0])\n"
+            "print(flags[1])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertEqual(run_output.strip().splitlines(), ["3.25", "True"])
+
+    def test_compile_source_rejects_tuple_index_assignment_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "pair = (1, 2)\n"
+                "pair[0] = 9\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn("native compilation does not support tuple index assignment yet", result.errors.render())
+
+    def test_compile_source_supports_string_indexing_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "word = \"hello\"\n"
+            "print(word[1])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_str_get_index", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["e"])
+
+    def test_compile_source_supports_string_literal_indexing_for_native_path(self):
+        result, _, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "print(\"abc\"[1])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertEqual(run_output.strip().splitlines(), ["b"])
+
+    def test_compile_source_supports_string_slicing_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "word = \"hello\"\n"
+            "print(word[1:4])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_str_slice", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["ell"])
+
+    def test_compile_source_supports_len_on_list_tuple_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [1, 2, 3]\n"
+            "pair = (4, 5)\n"
+            "print(len(items))\n"
+            "print(len(pair))\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_len", c_code)
+        self.assertIn("py_tuple_len", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["3", "2"])
+
     def test_compile_source_rejects_default_and_keyword_arguments_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = os.path.join(temp_dir, "program.c")
@@ -755,10 +881,17 @@ class PipelineTests(unittest.TestCase):
                     output_path = os.path.join(temp_dir, "program.c")
                     result = compile_source(source, filename="inline.py", output=output_path)
                 self.assertFalse(result.success)
-                self.assertIn(
-                    "native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet",
-                    result.errors.render(),
-                )
+                rendered = result.errors.render()
+                if "items[:1]" in source:
+                    self.assertIn(
+                        "native compilation only supports string slicing with a step of 1 for now",
+                        rendered,
+                    )
+                else:
+                    self.assertIn(
+                        "native compilation does not support unpacking assignment, delete, global/nonlocal, or with statements yet",
+                        rendered,
+                    )
 
     def test_compile_source_rejects_comprehensions_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -769,7 +902,7 @@ class PipelineTests(unittest.TestCase):
                 output=output_path,
             )
         self.assertFalse(result.success)
-        self.assertIn("native compilation does not support lists, tuples, indexing, or len() yet", result.errors.render())
+        self.assertIn("native compilation does not support comprehensions yet", result.errors.render())
 
     def test_compile_source_rejects_comparison_chaining_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:

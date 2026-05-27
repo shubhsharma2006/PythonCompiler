@@ -3,6 +3,7 @@ from __future__ import annotations
 from compiler.core.ast import (
     AssignStmt,
     AttributeAssignStmt,
+    IndexAssignStmt,
     AttributeExpr,
     BinaryExpr,
     BoolOpExpr,
@@ -152,6 +153,12 @@ class NameResolver:
 
         if isinstance(statement, AttributeAssignStmt):
             self._resolve_expr(statement.object, scope)
+            self._resolve_expr(statement.value, scope)
+            return
+
+        if isinstance(statement, IndexAssignStmt):
+            self._resolve_expr(statement.collection, scope)
+            self._resolve_expr(statement.index, scope)
             self._resolve_expr(statement.value, scope)
             return
 

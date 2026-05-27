@@ -1,7 +1,7 @@
 """Recursive descent statement parser — all stages (A through D)."""
 from __future__ import annotations
 from compiler.core.ast import (
-    AssignStmt, AttributeAssignStmt, BinaryExpr, BreakStmt, CallExpr,
+    AssignStmt, AttributeAssignStmt, IndexAssignStmt, BinaryExpr, BreakStmt, CallExpr,
     ClassDef, ConstantExpr, ContinueStmt, DeleteStmt, ExceptHandler,
     ExprStmt, ForStmt, FromImportStmt, FunctionDef, GlobalStmt, IfStmt,
     ImportStmt, NameExpr, NonlocalStmt, PassStmt, PrintStmt, Program,
@@ -556,14 +556,39 @@ class StmtParser:
         if self.cursor.peek().text in AUGASSIGN_OPS:
             op_tok = self.cursor.advance()
             base_op = AUGASSIGN_OPS[op_tok.text]
-            if not isinstance(expr, NameExpr):
-                self.errors.error("Syntax", "only simple name augmented assignment is supported", start.line, start.column)
-                return None
             right = self.expr.parse_expression()
-            left = NameExpr(span=expr.span, name=expr.name)
-            value = BinaryExpr(span=self.cursor.span_from(start), op=base_op, left=left, right=right)
-            self._consume_newline()
-            return AssignStmt(span=self.cursor.span_from(start), name=expr.name, value=value)
+            if isinstance(expr, NameExpr):
+                left = NameExpr(span=expr.span, name=expr.name)
+                value = BinaryExpr(span=self.cursor.span_from(start), op=base_op, left=left, right=right)
+                self._consume_newline()
+                return AssignStmt(span=self.cursor.span_from(start), name=expr.name, value=value)
+            if isinstance(expr, AttributeExpr):
+                left = AttributeExpr(span=expr.span, object=expr.object, attr_name=expr.attr_name)
+                value = BinaryExpr(span=self.cursor.span_from(start), op=base_op, left=left, right=right)
+                self._consume_newline()
+                return AttributeAssignStmt(
+                    span=self.cursor.span_from(start),
+                    object=expr.object,
+                    attr_name=expr.attr_name,
+                    value=value,
+                )
+            if isinstance(expr, IndexExpr):
+                left = IndexExpr(span=expr.span, collection=expr.collection, index=expr.index)
+                value = BinaryExpr(span=self.cursor.span_from(start), op=base_op, left=left, right=right)
+                self._consume_newline()
+                return IndexAssignStmt(
+                    span=self.cursor.span_from(start),
+                    collection=expr.collection,
+                    index=expr.index,
+                    value=value,
+                )
+            self.errors.error(
+                "Syntax",
+                "only name, attribute, or subscript augmented assignment is supported",
+                start.line,
+                start.column,
+            )
+            return None
         # Simple assignment: target = value
         if self.cursor.peek().text == "=":
             self.cursor.advance()

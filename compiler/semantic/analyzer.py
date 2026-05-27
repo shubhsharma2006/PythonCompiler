@@ -16,14 +16,23 @@ class SemanticAnalyzer:
     def analyze(self, program: Program) -> SemanticModel:
         symbols = SymbolCollector(self.errors).collect(program)
         if self.errors.has_errors():
-            return SemanticModel(globals=dict(symbols.global_scope.values), functions=symbols.functions, expr_types={})
+            return SemanticModel(
+                globals=dict(symbols.global_scope.values),
+                functions=symbols.functions,
+                expr_types={},
+                container_elem_types={},
+                container_var_elem_types={},
+            )
 
         NameResolver(self.errors).resolve(program, symbols)
-        expr_types = TypeChecker(self.errors).check(program, symbols)
+        checker = TypeChecker(self.errors)
+        expr_types = checker.check(program, symbols)
         ControlFlowChecker(self.errors).check(program, symbols)
 
         return SemanticModel(
             globals=dict(symbols.global_scope.values),
             functions=symbols.functions,
             expr_types=expr_types,
+            container_elem_types=checker.container_elem_types,
+            container_var_elem_types=checker.container_var_elem_types,
         )
