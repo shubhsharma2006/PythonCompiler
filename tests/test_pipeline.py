@@ -828,6 +828,24 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("py_str_slice", c_code)
         self.assertEqual(run_output.strip().splitlines(), ["ell"])
 
+    def test_compile_source_supports_string_slicing_with_step_for_native_path(self):
+        result, _, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "print(\"abcdef\"[::2])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertEqual(run_output.strip().splitlines(), ["ace"])
+
+    def test_compile_source_supports_string_slicing_with_negative_step_for_native_path(self):
+        result, _, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "print(\"hello\"[::-1])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertEqual(run_output.strip().splitlines(), ["olleh"])
+
     def test_compile_source_supports_len_on_list_tuple_for_native_path(self):
         result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
             "items = [1, 2, 3]\n"
@@ -884,7 +902,7 @@ class PipelineTests(unittest.TestCase):
                 rendered = result.errors.render()
                 if "items[:1]" in source:
                     self.assertIn(
-                        "native compilation only supports string slicing with a step of 1 for now",
+                        "native compilation only supports string slicing with a constant non-zero step for now",
                         rendered,
                     )
                 else:
@@ -930,7 +948,10 @@ class PipelineTests(unittest.TestCase):
                 output=output_path,
             )
         self.assertFalse(result.success)
-        self.assertIn("native compilation does not support slicing, unpacking assignment, delete, global/nonlocal, or with statements yet", result.errors.render())
+        self.assertIn(
+            "native compilation does not support unpacking assignment, delete, global/nonlocal, or with statements yet",
+            result.errors.render(),
+        )
 
     def test_compile_source_rejects_inheritance_and_super_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:

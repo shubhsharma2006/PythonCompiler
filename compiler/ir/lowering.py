@@ -672,16 +672,19 @@ class CFGLowering:
             if isinstance(expr.index, SliceExpr) and collection_type == ValueType.STRING:
                 start_name, has_start = self._emit_slice_part(expr.index.lower)
                 end_name, has_end = self._emit_slice_part(expr.index.upper)
+                step_name, has_step = self._emit_slice_step(expr.index.step)
                 has_start_name = self._new_temp(ValueType.INT)
                 has_end_name = self._new_temp(ValueType.INT)
+                has_step_name = self._new_temp(ValueType.INT)
                 self._emit(LoadConst(has_start_name, has_start, ValueType.INT))
                 self._emit(LoadConst(has_end_name, has_end, ValueType.INT))
+                self._emit(LoadConst(has_step_name, has_step, ValueType.INT))
                 target = self._new_temp(ValueType.STRING)
                 self._emit(
                     Call(
                         target,
                         "py_str_slice",
-                        [collection_name, start_name, end_name, has_start_name, has_end_name],
+                        [collection_name, start_name, end_name, step_name, has_start_name, has_end_name, has_step_name],
                         ValueType.STRING,
                         can_raise=True,
                         exception_target=exception_target,
@@ -919,6 +922,14 @@ class CFGLowering:
         if expr is None:
             temp = self._new_temp(ValueType.INT)
             self._emit(LoadConst(temp, 0, ValueType.INT))
+            return temp, 0
+        name, _ = self._emit_expr(expr)
+        return name, 1
+
+    def _emit_slice_step(self, expr) -> tuple[str, int]:
+        if expr is None:
+            temp = self._new_temp(ValueType.INT)
+            self._emit(LoadConst(temp, 1, ValueType.INT))
             return temp, 0
         name, _ = self._emit_expr(expr)
         return name, 1

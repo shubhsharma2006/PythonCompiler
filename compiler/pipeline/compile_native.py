@@ -94,7 +94,7 @@ def _program_uses_unsupported_slicing(program, semantic) -> bool:
         step = node.index.step
         if step is None:
             continue
-        if isinstance(step, ConstantExpr) and isinstance(step.value, int) and step.value == 1:
+        if isinstance(step, ConstantExpr) and isinstance(step.value, int) and step.value != 0:
             continue
         return True
     return False
@@ -190,7 +190,7 @@ def compile_source(
     if _program_uses_slicing(result.program) and _program_uses_unsupported_slicing(result.program, result.semantic):
         result.errors.error(
             "Codegen",
-            "native compilation only supports string slicing with a step of 1 for now",
+            "native compilation only supports string slicing with a constant non-zero step for now",
         )
         result.success = False
         return result
