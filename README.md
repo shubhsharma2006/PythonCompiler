@@ -178,6 +178,7 @@ The native lane is strongest today at:
 - simple control flow
 - function calls
 - key exception/control-transfer cases
+- homogeneous primitive list/tuple literals, indexing, slicing, `len()`, truthiness, equality, membership, and display
 - optimization and codegen infrastructure
 
 ### Still intentionally limited on the native lane
@@ -215,14 +216,14 @@ Priority order:
 3. reduce orchestration bottlenecks
 4. expand the native runtime in deliberate slices
 
-The next major native tranche should be:
+The current native-runtime tranche is now underway:
 
-1. tuples
-2. lists
-3. indexing
-4. `len()`
+1. homogeneous primitive tuples/lists
+2. indexing
+3. `len()`
+4. slicing with a restricted native contract
 
-That is the right next step because it exercises:
+The next step inside that tranche is to broaden container parity beyond the current homogeneous primitive list/tuple subset without losing cleanup and ownership correctness. This remains the right focus because it exercises:
 
 - allocation
 - ownership

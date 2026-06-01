@@ -44,7 +44,7 @@ from compiler.core.ast import (
 
 
 VM_ONLY_BUILTIN_CALLS = {
-    "repr", "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
+    "ascii", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes", "bytearray",
     "frozenset", "complex", "type", "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
     "callable", "id", "enumerate", "zip", "map", "filter", "reversed", "sorted", "iter", "next", "abs",
     "round", "min", "max", "sum", "pow", "divmod", "hash", "hex", "oct", "bin", "chr", "ord", "format",

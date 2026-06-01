@@ -846,6 +846,73 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(executable_exists)
         self.assertEqual(run_output.strip().splitlines(), ["olleh"])
 
+    def test_compile_source_supports_list_slicing_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [0, 1, 2, 3, 4]\n"
+            "part = items[1:4]\n"
+            "print(len(part))\n"
+            "print(part[0])\n"
+            "print(part[2])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_slice_int", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["3", "1", "3"])
+
+    def test_compile_source_supports_list_slicing_with_negative_indices_and_step_for_native_path(self):
+        result, _, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [0, 1, 2, 3, 4]\n"
+            "tail = items[-3:-1]\n"
+            "rev = items[::-1]\n"
+            "print(len(tail))\n"
+            "print(tail[0])\n"
+            "print(tail[1])\n"
+            "print(rev[0])\n"
+            "print(rev[4])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertEqual(run_output.strip().splitlines(), ["2", "2", "3", "4", "0"])
+
+    def test_compile_source_supports_tuple_and_string_list_slicing_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "pair = (10, 20, 30, 40)\n"
+            "words = [\"aa\", \"bb\", \"cc\", \"dd\"]\n"
+            "mid = pair[1:4:2]\n"
+            "picked = words[::2]\n"
+            "print(len(mid))\n"
+            "print(mid[0])\n"
+            "print(mid[1])\n"
+            "print(len(picked))\n"
+            "print(picked[0])\n"
+            "print(picked[1])\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_tuple_slice_int", c_code)
+        self.assertIn("py_list_slice_str", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["2", "20", "40", "2", "aa", "cc"])
+
+    def test_compile_source_rejects_dynamic_slice_step_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "items = [0, 1, 2, 3]\n"
+                "step = 2\n"
+                "part = items[::step]\n"
+                "print(len(part))\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn(
+            "native compilation only supports string/list/tuple slicing with homogeneous primitive elements and a constant non-zero step for now",
+            result.errors.render(),
+        )
+
     def test_compile_source_supports_len_on_list_tuple_for_native_path(self):
         result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
             "items = [1, 2, 3]\n"
@@ -859,6 +926,166 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("py_list_len", c_code)
         self.assertIn("py_tuple_len", c_code)
         self.assertEqual(run_output.strip().splitlines(), ["3", "2"])
+
+    def test_compile_source_supports_printing_list_tuple_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "nums = [1, 2]\n"
+            "flags = [True, False]\n"
+            "words = [\"aa\", \"bb\"]\n"
+            "pair = (3.5, 4.5)\n"
+            "single = (7,)\n"
+            "print(nums)\n"
+            "print(flags)\n"
+            "print(words)\n"
+            "print(pair)\n"
+            "print(single)\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_repr_int", c_code)
+        self.assertIn("py_tuple_repr_float", c_code)
+        self.assertEqual(
+            run_output.strip().splitlines(),
+            ["[1, 2]", "[True, False]", "['aa', 'bb']", "(3.5, 4.5)", "(7,)"],
+        )
+
+    def test_compile_source_supports_str_and_repr_on_containers_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [1, 2, 3]\n"
+            "pair = (\"aa\", \"bb\")\n"
+            "print(str(items))\n"
+            "print(repr(pair))\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_repr_int", c_code)
+        self.assertIn("py_tuple_repr_str", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["[1, 2, 3]", "('aa', 'bb')"])
+
+    def test_compile_source_supports_container_truthiness_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [1]\n"
+            "empty = items[:0]\n"
+            "rev = items[::-1]\n"
+            "pair = (2,)\n"
+            "empty_pair = pair[:0]\n"
+            "if items:\n"
+            "    print(1)\n"
+            "else:\n"
+            "    print(0)\n"
+            "if empty:\n"
+            "    print(1)\n"
+            "else:\n"
+            "    print(0)\n"
+            "print(not empty)\n"
+            "if rev:\n"
+            "    print(1)\n"
+            "else:\n"
+            "    print(0)\n"
+            "if empty_pair:\n"
+            "    print(1)\n"
+            "else:\n"
+            "    print(0)\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_truthy_list", c_code)
+        self.assertIn("py_truthy_tuple", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["1", "0", "True", "1", "0"])
+
+    def test_compile_source_supports_container_equality_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "a = [1, 2]\n"
+            "b = [1, 2]\n"
+            "c = [2, 1]\n"
+            "pair = (\"aa\", \"bb\")\n"
+            "same = (\"aa\", \"bb\")\n"
+            "other = (\"aa\", \"cc\")\n"
+            "print(a == b)\n"
+            "print(a != c)\n"
+            "print(a == c)\n"
+            "print(pair == same)\n"
+            "print(pair != other)\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_eq_int", c_code)
+        self.assertIn("py_tuple_eq_str", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["True", "True", "False", "True", "True"])
+
+    def test_compile_source_supports_container_membership_for_native_path(self):
+        result, c_code, run_output, rendered, _, _, _, executable_exists = self.compile_program(
+            "items = [1, 2, 3]\n"
+            "pair = (\"aa\", \"bb\")\n"
+            "print(2 in items)\n"
+            "print(4 not in items)\n"
+            "print(\"aa\" in pair)\n"
+            "print(\"cc\" not in pair)\n",
+            run=True,
+        )
+        self.assertTrue(result.success, rendered)
+        self.assertTrue(executable_exists)
+        self.assertIn("py_list_contains_int", c_code)
+        self.assertIn("py_tuple_contains_str", c_code)
+        self.assertEqual(run_output.strip().splitlines(), ["True", "True", "True", "True"])
+
+    def test_compile_source_rejects_unknown_container_display_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "def choose(flag):\n"
+                "    if flag:\n"
+                "        return [1, 2]\n"
+                "    return [3, 4]\n\n"
+                "items = choose(True)\n"
+                "print(items)\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn(
+            "native compilation only supports printing homogeneous primitive-element containers plus str()/repr() on that subset for now",
+            result.errors.render(),
+        )
+
+    def test_compile_source_rejects_unknown_container_compare_for_native_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "program.c")
+            result = compile_source(
+                "def choose(flag):\n"
+                "    if flag:\n"
+                "        return [1, 2]\n"
+                "    return [3, 4]\n\n"
+                "items = choose(True)\n"
+                "print(items == [1, 2])\n",
+                filename="inline.py",
+                output=output_path,
+            )
+        self.assertFalse(result.success)
+        self.assertIn(
+            "native compilation only supports list/tuple equality, membership, and truthy/display semantics on homogeneous primitive-element containers for now",
+            result.errors.render(),
+        )
+
+    def test_compile_source_rejects_unsupported_stringification_for_native_path(self):
+        samples = [
+            "print(repr(1))\n",
+            "print(ascii([1, 2]))\n",
+        ]
+        for source in samples:
+            with self.subTest(source=source):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_path = os.path.join(temp_dir, "program.c")
+                    result = compile_source(source, filename="inline.py", output=output_path)
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "native compilation only supports printing homogeneous primitive-element containers plus str()/repr() on that subset for now",
+                    result.errors.render(),
+                )
 
     def test_compile_source_rejects_default_and_keyword_arguments_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -888,7 +1115,6 @@ class PipelineTests(unittest.TestCase):
 
     def test_compile_source_rejects_core_vm_only_features_for_native_path(self):
         samples = [
-            "items = [1, 2]\nprint(items[:1])\n",
             "a, b = (1, 2)\nprint(a)\n",
             "items = [1, 2]\ndel items[0]\nprint(len(items))\n",
             "x = 1\ndef update():\n    global x\n    x = x + 1\nprint(x)\n",
@@ -900,16 +1126,10 @@ class PipelineTests(unittest.TestCase):
                     result = compile_source(source, filename="inline.py", output=output_path)
                 self.assertFalse(result.success)
                 rendered = result.errors.render()
-                if "items[:1]" in source:
-                    self.assertIn(
-                        "native compilation only supports string slicing with a constant non-zero step for now",
-                        rendered,
-                    )
-                else:
-                    self.assertIn(
-                        "native compilation does not support unpacking assignment, delete, global/nonlocal, or with statements yet",
-                        rendered,
-                    )
+                self.assertIn(
+                    "native compilation does not support unpacking assignment, delete, global/nonlocal, or with statements yet",
+                    rendered,
+                )
 
     def test_compile_source_rejects_comprehensions_for_native_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:

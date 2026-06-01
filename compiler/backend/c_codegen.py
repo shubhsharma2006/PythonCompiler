@@ -296,12 +296,15 @@ class CCodeGenerator:
             elif isinstance(terminator, BranchTerminator):
                 cond = terminator.condition
                 cond_type = type_map.get(cond, ValueType.UNKNOWN)
-                if cond_type == ValueType.INT or cond_type == ValueType.BOOL:
-                    cond_expr = f"py_truthy_int({cond})"
-                elif cond_type == ValueType.FLOAT:
-                    cond_expr = f"py_truthy_float({cond})"
-                elif cond_type == ValueType.STRING:
-                    cond_expr = f"py_truthy_str({cond})"
+                if cond_type in {
+                    ValueType.INT,
+                    ValueType.BOOL,
+                    ValueType.FLOAT,
+                    ValueType.STRING,
+                    ValueType.LIST,
+                    ValueType.TUPLE,
+                }:
+                    cond_expr = self.runtime.truthy_call(cond, cond_type)
                 else:
                     # Fallback: C truthiness. Native backend doesn't fully support dynamic types yet.
                     cond_expr = cond

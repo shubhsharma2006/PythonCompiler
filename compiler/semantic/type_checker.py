@@ -733,7 +733,14 @@ class TypeChecker:
             if isinstance(expr.index, SliceExpr):
                 if collection_type not in {ValueType.LIST, ValueType.TUPLE, ValueType.STRING, ValueType.UNKNOWN}:
                     self._error(expr.collection, f"cannot slice value of type {collection_type.value}")
-                result_type = ValueType.STRING if collection_type == ValueType.STRING else ValueType.UNKNOWN
+                if collection_type in {ValueType.LIST, ValueType.TUPLE}:
+                    elem_type = self._container_elem_type_for_expr(expr.collection, scope)
+                    self.container_elem_types[id(expr)] = elem_type or ValueType.UNKNOWN
+                    result_type = collection_type
+                elif collection_type == ValueType.STRING:
+                    result_type = ValueType.STRING
+                else:
+                    result_type = ValueType.UNKNOWN
                 return self._set_expr_type(expr, result_type)
             if collection_type == ValueType.DICT:
                 if index_type == ValueType.VOID:

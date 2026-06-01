@@ -223,6 +223,9 @@ class CFGLowering:
         if isinstance(statement, PrintStmt):
             for i, value_expr in enumerate(statement.values):
                 value_name, value_type = self._emit_expr(value_expr)
+                if value_type in {ValueType.LIST, ValueType.TUPLE}:
+                    value_name = self._emit_container_repr(value_expr, value_name, value_type)
+                    value_type = ValueType.STRING
                 self._emit(Print(value_name, value_type, newline=False))
                 if i < len(statement.values) - 1:
                     if statement.sep is not None:
@@ -565,11 +568,15 @@ class CFGLowering:
             return expr.name, self._runtime_type(expr)
 
         if isinstance(expr, UnaryExpr):
-            operand_name, _ = self._emit_expr(expr.operand)
+            operand_name, operand_type = self._emit_expr(expr.operand)
+            if expr.op == "not":
+                truthy_name = self._emit_truthy_value(operand_name, operand_type)
+                temp = self._new_temp(ValueType.BOOL)
+                self._emit(UnaryOp(temp, "!", truthy_name, ValueType.BOOL))
+                return temp, ValueType.BOOL
             value_type = self._runtime_type(expr)
             temp = self._new_temp(value_type)
-            op = "!" if expr.op == "not" else expr.op
-            self._emit(UnaryOp(temp, op, operand_name, value_type))
+            self._emit(UnaryOp(temp, expr.op, operand_name, value_type))
             return temp, value_type
 
         if isinstance(expr, BinaryExpr):
@@ -657,8 +664,19 @@ class CFGLowering:
             return target, ValueType.TUPLE
 
         if isinstance(expr, CompareExpr):
-            left_name, _ = self._emit_expr(expr.left)
-            right_name, _ = self._emit_expr(expr.right)
+            left_name, left_type = self._emit_expr(expr.left)
+            right_name, right_type = self._emit_expr(expr.right)
+            helper_target = self._emit_supported_compare(
+                expr.op,
+                expr.left,
+                left_name,
+                left_type,
+                expr.right,
+                right_name,
+                right_type,
+            )
+            if helper_target is not None:
+                return helper_target, ValueType.BOOL
             temp = self._new_temp(ValueType.BOOL)
             self._emit(BinaryOp(temp, expr.op, left_name, right_name, ValueType.BOOL))
             return temp, ValueType.BOOL
@@ -669,7 +687,7 @@ class CFGLowering:
         if isinstance(expr, IndexExpr):
             collection_name, collection_type = self._emit_expr(expr.collection)
             exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
-            if isinstance(expr.index, SliceExpr) and collection_type == ValueType.STRING:
+            if isinstance(expr.index, SliceExpr) and collection_type in {ValueType.STRING, ValueType.LIST, ValueType.TUPLE}:
                 start_name, has_start = self._emit_slice_part(expr.index.lower)
                 end_name, has_end = self._emit_slice_part(expr.index.upper)
                 step_name, has_step = self._emit_slice_step(expr.index.step)
@@ -679,18 +697,34 @@ class CFGLowering:
                 self._emit(LoadConst(has_start_name, has_start, ValueType.INT))
                 self._emit(LoadConst(has_end_name, has_end, ValueType.INT))
                 self._emit(LoadConst(has_step_name, has_step, ValueType.INT))
-                target = self._new_temp(ValueType.STRING)
+                if collection_type == ValueType.STRING:
+                    target = self._new_temp(ValueType.STRING)
+                    self._emit(
+                        Call(
+                            target,
+                            "py_str_slice",
+                            [collection_name, start_name, end_name, step_name, has_start_name, has_end_name, has_step_name],
+                            ValueType.STRING,
+                            can_raise=True,
+                            exception_target=exception_target,
+                        )
+                    )
+                    return target, ValueType.STRING
+                elem_type = self._index_elem_type(expr.collection)
+                suffix = self._container_suffix(elem_type)
+                target = self._new_temp(collection_type)
+                helper_name = f"py_list_slice_{suffix}" if collection_type == ValueType.LIST else f"py_tuple_slice_{suffix}"
                 self._emit(
                     Call(
                         target,
-                        "py_str_slice",
+                        helper_name,
                         [collection_name, start_name, end_name, step_name, has_start_name, has_end_name, has_step_name],
-                        ValueType.STRING,
+                        collection_type,
                         can_raise=True,
                         exception_target=exception_target,
                     )
                 )
-                return target, ValueType.STRING
+                return target, collection_type
             index_name, _ = self._emit_expr(expr.index)
             if collection_type == ValueType.LIST:
                 elem_type = self._index_elem_type(expr.collection)
@@ -750,6 +784,23 @@ class CFGLowering:
                     func_name = "py_len_str"
                 self._emit(Call(target, func_name, [arg_name], ValueType.INT, can_raise=False, exception_target=exception_target))
                 return target or "0", ValueType.INT
+
+            if expr.func_name in {"str", "repr"} and len(expr.args) == 1 and not expr.kwargs:
+                arg_name, arg_type = self._emit_expr(expr.args[0])
+                if arg_type in {ValueType.LIST, ValueType.TUPLE}:
+                    target = None if discard_result else self._new_temp(ValueType.STRING)
+                    exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+                    self._emit(
+                        Call(
+                            target,
+                            self._container_repr_helper(expr.args[0], arg_type),
+                            [arg_name],
+                            ValueType.STRING,
+                            can_raise=True,
+                            exception_target=exception_target,
+                        )
+                    )
+                    return target or "0", ValueType.STRING
 
             args = [self._emit_expr(arg)[0] for arg in expr.args]
             value_type = self._runtime_type(expr)
@@ -933,3 +984,92 @@ class CFGLowering:
             return temp, 0
         name, _ = self._emit_expr(expr)
         return name, 1
+
+    def _emit_container_repr(self, expr, value_name: str, value_type: ValueType) -> str:
+        target = self._new_temp(ValueType.STRING)
+        exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+        self._emit(
+            Call(
+                target,
+                self._container_repr_helper(expr, value_type),
+                [value_name],
+                ValueType.STRING,
+                can_raise=True,
+                exception_target=exception_target,
+            )
+        )
+        return target
+
+    def _container_repr_helper(self, expr, value_type: ValueType) -> str:
+        elem_type = self._index_elem_type(expr)
+        suffix = self._container_suffix(elem_type)
+        prefix = "py_list_repr_" if value_type == ValueType.LIST else "py_tuple_repr_"
+        return f"{prefix}{suffix}"
+
+    def _emit_truthy_value(self, value_name: str, value_type: ValueType) -> str:
+        if value_type == ValueType.BOOL:
+            return value_name
+        if value_type not in {ValueType.INT, ValueType.FLOAT, ValueType.STRING, ValueType.LIST, ValueType.TUPLE}:
+            return value_name
+        target = self._new_temp(ValueType.BOOL)
+        exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+        if value_type == ValueType.INT:
+            helper_name = "py_truthy_int"
+        elif value_type == ValueType.FLOAT:
+            helper_name = "py_truthy_float"
+        elif value_type == ValueType.STRING:
+            helper_name = "py_truthy_str"
+        elif value_type == ValueType.LIST:
+            helper_name = "py_truthy_list"
+        else:
+            helper_name = "py_truthy_tuple"
+        self._emit(Call(target, helper_name, [value_name], ValueType.BOOL, can_raise=False, exception_target=exception_target))
+        return target
+
+    def _emit_supported_compare(
+        self,
+        op: str,
+        left_expr,
+        left_name: str,
+        left_type: ValueType,
+        right_expr,
+        right_name: str,
+        right_type: ValueType,
+    ) -> str | None:
+        exception_target = self.exception_target_stack[-1] if self.exception_target_stack else "cleanup"
+        container_types = {ValueType.LIST, ValueType.TUPLE}
+
+        if op in {"==", "!="} and (left_type in container_types or right_type in container_types):
+            target = self._new_temp(ValueType.BOOL)
+            if left_type != right_type:
+                self._emit(LoadConst(target, op == "!=", ValueType.BOOL))
+                return target
+            if left_type in container_types:
+                left_elem_type = self._index_elem_type(left_expr)
+                right_elem_type = self._index_elem_type(right_expr)
+                if left_elem_type != right_elem_type:
+                    self._emit(LoadConst(target, op == "!=", ValueType.BOOL))
+                    return target
+                suffix = self._container_suffix(left_elem_type)
+                helper_name = f"{'py_list' if left_type == ValueType.LIST else 'py_tuple'}_eq_{suffix}"
+                eq_target = target if op == "==" else self._new_temp(ValueType.BOOL)
+                self._emit(Call(eq_target, helper_name, [left_name, right_name], ValueType.BOOL, can_raise=True, exception_target=exception_target))
+                if op == "!=":
+                    self._emit(UnaryOp(target, "!", eq_target, ValueType.BOOL))
+                return target
+
+        if op in {"in", "not in"} and right_type in container_types:
+            target = self._new_temp(ValueType.BOOL)
+            elem_type = self._index_elem_type(right_expr)
+            if left_type != elem_type:
+                self._emit(LoadConst(target, op == "not in", ValueType.BOOL))
+                return target
+            suffix = self._container_suffix(elem_type)
+            helper_name = f"{'py_list' if right_type == ValueType.LIST else 'py_tuple'}_contains_{suffix}"
+            contains_target = target if op == "in" else self._new_temp(ValueType.BOOL)
+            self._emit(Call(contains_target, helper_name, [right_name, left_name], ValueType.BOOL, can_raise=True, exception_target=exception_target))
+            if op == "not in":
+                self._emit(UnaryOp(target, "!", contains_target, ValueType.BOOL))
+            return target
+
+        return None

@@ -5,7 +5,7 @@ import os
 import subprocess
 
 from compiler.backend import CCodeGenerator
-from compiler.core.ast import CallExpr, ConstantExpr, DictExpr, IndexAssignStmt, IndexExpr, ListExpr, NameExpr, SetExpr, SliceExpr, TupleExpr
+from compiler.core.ast import CallExpr, CompareExpr, ConstantExpr, DictExpr, IndexAssignStmt, IndexExpr, ListExpr, NameExpr, PrintStmt, SetExpr, SliceExpr, TupleExpr
 from compiler.core.types import ValueType, merge_types
 from compiler.ir import (
     CFGConstantPropagation,
@@ -50,6 +50,9 @@ from .feature_gates import (
 from .model import CompilationResult
 
 
+SUPPORTED_CONTAINER_ELEM_TYPES = {ValueType.INT, ValueType.FLOAT, ValueType.BOOL, ValueType.STRING}
+
+
 def _program_uses_len_with_non_string(program, semantic) -> bool:
     for node in _iter_nodes(program):
         if isinstance(node, CallExpr) and node.func_name == "len" and node.args:
@@ -65,6 +68,14 @@ def _container_elem_type_for_expr(expr, semantic) -> ValueType | None:
     if isinstance(expr, NameExpr):
         return semantic.container_var_elem_types.get(expr.name)
     return semantic.container_elem_types.get(id(expr))
+
+
+def _supports_native_homogeneous_container(expr, semantic) -> bool:
+    container_type = semantic.expr_type(expr)
+    if container_type not in {ValueType.LIST, ValueType.TUPLE}:
+        return False
+    elem_type = _container_elem_type_for_expr(expr, semantic)
+    return elem_type in SUPPORTED_CONTAINER_ELEM_TYPES
 
 
 def _program_uses_unsupported_indexing(program, semantic) -> bool:
@@ -89,14 +100,68 @@ def _program_uses_unsupported_slicing(program, semantic) -> bool:
         if not isinstance(node.index, SliceExpr):
             continue
         collection_type = semantic.expr_type(node.collection)
-        if collection_type != ValueType.STRING:
+        if collection_type not in {ValueType.STRING, ValueType.LIST, ValueType.TUPLE}:
             return True
+        if collection_type in {ValueType.LIST, ValueType.TUPLE}:
+            if not _supports_native_homogeneous_container(node.collection, semantic):
+                return True
         step = node.index.step
         if step is None:
             continue
         if isinstance(step, ConstantExpr) and isinstance(step.value, int) and step.value != 0:
             continue
         return True
+    return False
+
+
+def _program_uses_unsupported_container_display(program, semantic) -> bool:
+    for node in _iter_nodes(program):
+        if isinstance(node, PrintStmt):
+            for value in node.values:
+                if semantic.expr_type(value) in {ValueType.LIST, ValueType.TUPLE} and not _supports_native_homogeneous_container(value, semantic):
+                    return True
+        if isinstance(node, CallExpr) and node.func_name in {"str", "repr", "ascii"}:
+            if node.func_name == "ascii":
+                return True
+            if len(node.args) != 1 or node.kwargs or getattr(node, "kw_starred", []):
+                return True
+            arg_type = semantic.expr_type(node.args[0])
+            if node.func_name == "repr":
+                if arg_type not in {ValueType.LIST, ValueType.TUPLE}:
+                    return True
+                if not _supports_native_homogeneous_container(node.args[0], semantic):
+                    return True
+                continue
+            if arg_type in {ValueType.INT, ValueType.FLOAT, ValueType.BOOL, ValueType.STRING}:
+                continue
+            if arg_type in {ValueType.LIST, ValueType.TUPLE}:
+                if not _supports_native_homogeneous_container(node.args[0], semantic):
+                    return True
+                continue
+            return True
+    return False
+
+
+def _program_uses_unsupported_container_compare_membership(program, semantic) -> bool:
+    for node in _iter_nodes(program):
+        if not isinstance(node, CompareExpr):
+            continue
+        left_type = semantic.expr_type(node.left)
+        right_type = semantic.expr_type(node.right)
+        if node.op in {"==", "!="} and (left_type in {ValueType.LIST, ValueType.TUPLE} or right_type in {ValueType.LIST, ValueType.TUPLE}):
+            if left_type == ValueType.UNKNOWN or right_type == ValueType.UNKNOWN:
+                return True
+            if left_type in {ValueType.LIST, ValueType.TUPLE} and not _supports_native_homogeneous_container(node.left, semantic):
+                return True
+            if right_type in {ValueType.LIST, ValueType.TUPLE} and not _supports_native_homogeneous_container(node.right, semantic):
+                return True
+        if node.op in {"in", "not in"}:
+            if right_type not in {ValueType.LIST, ValueType.TUPLE}:
+                return True
+            if not _supports_native_homogeneous_container(node.right, semantic):
+                return True
+            if left_type == ValueType.UNKNOWN:
+                return True
     return False
 
 
@@ -190,7 +255,7 @@ def compile_source(
     if _program_uses_slicing(result.program) and _program_uses_unsupported_slicing(result.program, result.semantic):
         result.errors.error(
             "Codegen",
-            "native compilation only supports string slicing with a constant non-zero step for now",
+            "native compilation only supports string/list/tuple slicing with homogeneous primitive elements and a constant non-zero step for now",
         )
         result.success = False
         return result
@@ -217,6 +282,13 @@ def compile_source(
         )
         result.success = False
         return result
+    if _program_uses_unsupported_container_compare_membership(result.program, result.semantic):
+        result.errors.error(
+            "Codegen",
+            "native compilation only supports list/tuple equality, membership, and truthy/display semantics on homogeneous primitive-element containers for now",
+        )
+        result.success = False
+        return result
     if _program_uses_container_builtin_calls(result.program):
         result.errors.error("Codegen", "native compilation does not support list(), tuple(), dict(), or set() calls yet")
         result.success = False
@@ -229,6 +301,13 @@ def compile_source(
             )
             result.success = False
             return result
+    if _program_uses_unsupported_container_display(result.program, result.semantic):
+        result.errors.error(
+            "Codegen",
+            "native compilation only supports printing homogeneous primitive-element containers plus str()/repr() on that subset for now",
+        )
+        result.success = False
+        return result
     if _program_uses_object_features(result.program):
         result.errors.error("Codegen", "native compilation does not support classes, attributes, or methods yet")
         result.success = False

@@ -54,13 +54,13 @@ Scope notes:
 | Feature | Parser | VM | Native | Tested | Notes |
 |---|---|---:|---:|---:|---|
 | Integers / floats / bools / strings | ✅ | ✅ | ✅ | ✅ | Shared core literal support |
-| Lists | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects container features |
-| Tuples | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects container features |
+| Lists | ✅ | ✅ | ⚠️ | ✅ | Native supports homogeneous primitive-element literals, indexing, slicing, truthiness, equality, membership, and display |
+| Tuples | ✅ | ✅ | ⚠️ | ✅ | Native supports homogeneous primitive-element literals, indexing, slicing, truthiness, equality, membership, and display |
 | Dicts | ✅ | ✅ | ❌ | ✅ | VM supported; native unsupported |
 | Sets | ✅ | ✅ | ❌ | ✅ | VM supported; native unsupported |
-| Indexing | ✅ | ✅ | ❌ | ✅ | VM supports list/tuple/string/dict indexing; native rejects |
-| Slicing | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects slicing |
-| `len(...)` | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects `len()` on container features |
+| Indexing | ✅ | ✅ | ⚠️ | ✅ | Native supports strings and homogeneous primitive list/tuple indexing |
+| Slicing | ✅ | ✅ | ⚠️ | ✅ | Native supports strings plus homogeneous primitive list/tuple slicing with constant non-zero step |
+| `len(...)` | ✅ | ✅ | ⚠️ | ✅ | Native supports `len()` on strings, lists, and tuples |
 | Flat unpack assignment | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects unpacking |
 | Starred unpack assignment | ✅ | ✅ | ❌ | ✅ | VM supported; native unsupported |
 | `del` on names/subscripts | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects delete |
@@ -77,7 +77,7 @@ Scope notes:
 | Boolean `and/or/not` | ✅ | ✅ | ✅ | ✅ | Short-circuit behavior tested |
 | Comparisons `== != < <= > >=` | ✅ | ✅ | ✅ | ✅ | Core comparison support works |
 | Comparison chaining | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects chained comparisons |
-| Membership `in` / `not in` | ✅ | ✅ | ⚠️ | ✅ | VM supports; native should be treated as limited unless proven beyond current subset |
+| Membership `in` / `not in` | ✅ | ✅ | ⚠️ | ✅ | Native supports homogeneous primitive-element list/tuple membership; other cases remain restricted |
 | Identity `is` / `is not` | ✅ | ✅ | ⚠️ | ✅ | VM supports; native should be treated as limited unless proven beyond current subset |
 | Ternary `a if cond else b` | ✅ | ✅ | ✅ | ✅ | Tier-2 and lowering support exist |
 | Walrus `:=` | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects walrus |
@@ -125,11 +125,11 @@ Scope notes:
 
 | Feature | Parser | VM | Native | Tested | Notes |
 |---|---|---:|---:|---:|---|
-| `print(x)` | ✅ | ✅ | ✅ | ✅ | Basic print works in both lanes |
+| `print(x)` | ✅ | ✅ | ✅ | ✅ | Native now prints supported homogeneous primitive list/tuple values too |
 | Multi-argument `print(...)` | ✅ | ✅ | ❌ | ✅ | Native explicitly rejects VM-only builtin behavior |
 | `print(sep=..., end=...)` | ✅ | ✅ | ❌ | ✅ | VM supported; native unsupported |
 | `range(...)` | ✅ | ✅ | ⚠️ | ✅ | Native support is tied to `for range(...)` lowering, not full iterator parity |
-| `sorted`, `abs`, `str`, `repr`, `ascii` | ✅ | ✅ | ⚠️ | ✅ | VM builtin registry is broader; native availability is narrower and subset-dependent |
+| `sorted`, `abs`, `str`, `repr`, `ascii` | ✅ | ✅ | ⚠️ | ✅ | Native supports `str()` on scalars plus `str()`/`repr()` on supported homogeneous list/tuple values; `ascii()` stays unsupported |
 
 ## Native Lane Summary
 
@@ -141,6 +141,7 @@ Scope notes:
 - basic `try/except`
 - typed handlers
 - important `try/finally` control-transfer cases
+- homogeneous primitive list/tuple literals, indexing, slicing, `len()`, truthiness, equality, membership, and display
 - CFG / SSA / cleanup infrastructure
 
 ### Native is currently missing or intentionally restricted for
@@ -148,8 +149,8 @@ Scope notes:
 - imports and multi-file execution
 - closures and nested functions
 - generators
-- containers and indexing
-- slicing and unpacking
+- dicts, sets, and general container parity
+- dynamic-step slicing and unpacking
 - delete / global / nonlocal / `with`
 - classes and object model features
 - default/keyword/variadic call signatures
