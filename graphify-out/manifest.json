@@ -8,8 +8,8 @@
     "hash": "4a4ae7f3339c0ee386e79cea1c1ffa37"
   },
   "/Users/shubhsharma/Desktop/compiler project/py_runtime.c": {
-    "mtime": 1779809569.0703633,
-    "hash": "90cb164f5ed797e3340d9312949d750d"
+    "mtime": 1780430427.6190856,
+    "hash": "56e1e76a4690bd21ec447f84319e4610"
   },
   "/Users/shubhsharma/Desktop/compiler project/parsetab.py": {
     "mtime": 1775582269.2260547,
@@ -24,8 +24,8 @@
     "hash": "07be0c23b033c10e0986b378d64ed4cc"
   },
   "/Users/shubhsharma/Desktop/compiler project/py_runtime.h": {
-    "mtime": 1779809569.0701606,
-    "hash": "cd21b75177ccb6f3222ae6c21a935411"
+    "mtime": 1780430427.6185672,
+    "hash": "8815cc2096ad179bdf0adb79998bcbd7"
   },
   "/Users/shubhsharma/Desktop/compiler project/lexer.py": {
     "mtime": 1775625740.055646,
@@ -66,6 +66,10 @@
   "/Users/shubhsharma/Desktop/compiler project/tests/test_optimizer.py": {
     "mtime": 1775625148.0136497,
     "hash": "ab5e8d1fe93516a2a4c31576bbf9d15f"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/tests/test_differential.py": {
+    "mtime": 1780430360.5345666,
+    "hash": "9abfba33269b84a1a5cd71662c9d473f"
   },
   "/Users/shubhsharma/Desktop/compiler project/tests/test_def.py": {
     "mtime": 1777526141.7751815,
@@ -160,8 +164,8 @@
     "hash": "620dac227729a0d8d968b04a20c35148"
   },
   "/Users/shubhsharma/Desktop/compiler project/tests/test_pipeline.py": {
-    "mtime": 1779860236.730083,
-    "hash": "d01138524120e995b2740c28f8717efe"
+    "mtime": 1780302237.6851146,
+    "hash": "b18ce9dde89438476908a8e54e6da596"
   },
   "/Users/shubhsharma/Desktop/compiler project/tests/test_native_semantics.py": {
     "mtime": 1777641085.4355018,
@@ -179,13 +183,49 @@
     "mtime": 1775625740.0472732,
     "hash": "859251b443b0e6d89254d4d32623c7dd"
   },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/runner.py": {
+    "mtime": 1780430359.9330583,
+    "hash": "8ea57f2890f5eef90d5812ca6b17bee3"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/normalize.py": {
+    "mtime": 1780430359.5329647,
+    "hash": "5ff2d5b1fd0339d4af770891c66edb51"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/profile.py": {
+    "mtime": 1780430358.892176,
+    "hash": "7581472434f88f805913ca74ecbc06e9"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/__init__.py": {
+    "mtime": 1780430360.1202195,
+    "hash": "8e58ad9ccdf52e1cae310c96319eabc7"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/model.py": {
+    "mtime": 1780430358.6195014,
+    "hash": "4b8596c4313544d2a8d5341acb6c3b86"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/generator.py": {
+    "mtime": 1780430359.3262086,
+    "hash": "e249661e6e656ddbcfa16e6bca96082d"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/__main__.py": {
+    "mtime": 1780430360.3271916,
+    "hash": "85b0708ec7cdb7c02b10d21f3bd772b8"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/corpus.py": {
+    "mtime": 1780430359.115638,
+    "hash": "6d8cbd1d16f5dfbbd4b71d339f7b6476"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/compiler/differential/reporting.py": {
+    "mtime": 1780430359.746807,
+    "hash": "590e70fa77e35035544fb437e5fad4c9"
+  },
   "/Users/shubhsharma/Desktop/compiler project/compiler/pipeline/compile_native.py": {
-    "mtime": 1779860223.8563278,
-    "hash": "b195dad4e78b7da899fe73cb41cf97eb"
+    "mtime": 1780302132.2833912,
+    "hash": "702d8685d03c1bc4ac40389c58da3dbd"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/pipeline/feature_gates.py": {
-    "mtime": 1779860195.345505,
-    "hash": "82ce6a531862f5339ec9820c5ac30ee0"
+    "mtime": 1780302066.0574293,
+    "hash": "0c17ecf376d428c91fd00f049f5166df"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/pipeline/__init__.py": {
     "mtime": 1779703351.0123672,
@@ -316,8 +356,8 @@
     "hash": "09b8a9de0bc0a7e9d5ac2a8241434d40"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/ir/lowering.py": {
-    "mtime": 1779860195.3509877,
-    "hash": "4e8c1b527afc3f576e864d95bc721099"
+    "mtime": 1780302021.6499894,
+    "hash": "14a2692083ef9133b42d30e77aa0dcdd"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/ir/ownership_pass.py": {
     "mtime": 1779699080.037351,
@@ -352,8 +392,8 @@
     "hash": "0e2bc6b2eda943d11cc6e9c884a735a2"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/runtime/c_runtime.py": {
-    "mtime": 1779860195.360745,
-    "hash": "866f2f380f330cfb2fcee56d79da0f7f"
+    "mtime": 1780301904.447223,
+    "hash": "c5fe6ba67b64b916425bd10b65a0cb29"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/runtime/__init__.py": {
     "mtime": 1775665083.9516327,
@@ -376,8 +416,8 @@
     "hash": "1d8691d9144de77dbfc731672aefc368"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/backend/c_codegen.py": {
-    "mtime": 1779859704.204524,
-    "hash": "b521e311c7d348c0b0b022e9aa37ba78"
+    "mtime": 1780302033.6956897,
+    "hash": "b531799650002e6304a1a2f4d2767e61"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/cli/__init__.py": {
     "mtime": 1775625016.1712203,
@@ -416,8 +456,8 @@
     "hash": "51fe9444497bacb16d42781e9c467cd3"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/type_checker.py": {
-    "mtime": 1779860195.3454716,
-    "hash": "9a9ae00c5639369a1f78771db9b6ff71"
+    "mtime": 1780297454.3126686,
+    "hash": "ab150835ff506b0a69bc6322a50c423f"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler/semantic/analyzer.py": {
     "mtime": 1779859704.20998,
@@ -464,8 +504,8 @@
     "hash": "8c0bfa4ea50e4788154a5636c1fba304"
   },
   "/Users/shubhsharma/Desktop/compiler project/README.md": {
-    "mtime": 1779703514.9857702,
-    "hash": "ac675c54912852a981e4be00bf669f6e"
+    "mtime": 1780430418.7406006,
+    "hash": "42ecb64a18ed5478e8bf63909fa83d90"
   },
   "/Users/shubhsharma/Desktop/compiler project/compiler_deep_dive.md": {
     "mtime": 1779007313.5038853,
@@ -475,9 +515,29 @@
     "mtime": 1779015013.8058531,
     "hash": "c6be5ada846e87fe1713e126e4f05bf1"
   },
+  "/Users/shubhsharma/Desktop/compiler project/artifacts/parity/20260602T203407Z/summary.md": {
+    "mtime": 1780432454.0863116,
+    "hash": "89cb70a9ffd169a7cac226f5f78dda05"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/artifacts/parity/20260602T195932Z/summary.md": {
+    "mtime": 1780430374.661674,
+    "hash": "c6998021a2a3c97137dfa9733e5dde7b"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/artifacts/parity/20260602T195946Z/summary.md": {
+    "mtime": 1780430397.6532867,
+    "hash": "9f8dcefb5f23acb3d1a2b920085664ac"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/artifacts/parity/20260602T203725Z/summary.md": {
+    "mtime": 1780432714.8508294,
+    "hash": "e94d534972d4b1578707db60be50c95e"
+  },
+  "/Users/shubhsharma/Desktop/compiler project/artifacts/parity/20260602T203322Z/summary.md": {
+    "mtime": 1780432410.8829627,
+    "hash": "e5941a857fe35f9ab561d5f1514a0942"
+  },
   "/Users/shubhsharma/Desktop/compiler project/docs/feature_matrix.md": {
-    "mtime": 1779703519.9155724,
-    "hash": "328b9a99a8a57a81520c73165c7c089b"
+    "mtime": 1780302382.4613512,
+    "hash": "7f5078861e33853f1ab229f79314a3f3"
   },
   "/Users/shubhsharma/Desktop/compiler project/ast_output.png": {
     "mtime": 1775540784.0737941,

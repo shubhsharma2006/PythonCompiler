@@ -317,12 +317,27 @@ Run the full test stack with:
 ```bash
 python3 -m unittest discover -s tests -v
 python3 run_tests.py
+python3 -m compiler.differential run
+python3 -m compiler.differential fuzz --seed 7 --count 25
 ```
 
 CI runs both:
 
 - unit tests
 - integration tests
+
+The differential harness writes:
+
+- mismatch bundles under `artifacts/differential/<run-id>/`
+- parity summaries under `artifacts/parity/<run-id>/`
+
+It compares the current VM lane against the currently-supported native subset and captures:
+
+- normalized VM/native outcomes
+- lowered AST text
+- IR / SSA dumps
+- generated C output
+- reproducible mismatch metadata
 
 See:
 
@@ -340,13 +355,15 @@ See:
 Near-term:
 
 - keep the feature matrix authoritative
-- rewrite and simplify architecture boundaries
-- continue splitting and simplifying `compiler/pipeline/`
-- add native containers
+- build VM/native differential evidence
+- keep mismatch triage artifacts reproducible
+- harden native semantics from parity data
 
 Later:
 
+- broader parity metrics and debug visualization
 - native runtime maturity
+- native generators
 - object-model expansion
 - stronger tooling gates
 - more formal language-contract documentation
@@ -358,4 +375,4 @@ This is a **compiler engineering project**, not just a syntax experiment.
 The VM lane already makes it a meaningful Python-subset runtime.
 The native lane already makes it a meaningful compiler backend.
 The next step is not “add random features”.
-The next step is to **stabilize the architecture and expand native runtime capability deliberately**.
+The next step is to **prove VM/native agreement, harden the supported subset, and then expand runtime capability deliberately**.
