@@ -8,3 +8,5 @@ py_runtime.c
 py_runtime.h
 tmp*.py
 artifacts/
+graphify-out/cache/
+artifacts/
