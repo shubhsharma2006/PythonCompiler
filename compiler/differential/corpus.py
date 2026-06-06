@@ -59,6 +59,16 @@ print(total)
 """,
     ),
     ProgramCase(
+        case_id="for_range_empty",
+        name="For loop over empty range",
+        tags=(FEATURE_FOR_RANGE,),
+        source="""total = 0
+for i in range(3, 3):
+    total = total + i
+print(total)
+""",
+    ),
+    ProgramCase(
         case_id="positional_function_calls",
         name="Direct positional function calls",
         tags=(FEATURE_FUNCTION_CALLS, FEATURE_SCALAR_ARITHMETIC),
@@ -92,6 +102,19 @@ print(compute())
 """,
     ),
     ProgramCase(
+        case_id="try_finally_exception_path",
+        name="Try finally exception path",
+        tags=(FEATURE_BASIC_EXCEPTIONS, FEATURE_TRY_FINALLY),
+        source="""try:
+    try:
+        raise "boom"
+    finally:
+        print("cleanup")
+except:
+    print("handled")
+""",
+    ),
+    ProgramCase(
         case_id="list_tuple_len_index",
         name="List tuple len and indexing",
         tags=(FEATURE_LIST_LITERAL, FEATURE_TUPLE_LITERAL, FEATURE_LEN, FEATURE_INDEXING),
@@ -111,6 +134,17 @@ pair = (5, 6, 7, 8)
 print(items[1:4])
 print(items[::-1])
 print(pair[:3])
+""",
+    ),
+    ProgramCase(
+        case_id="container_slice_boundaries",
+        name="Slice boundary behavior",
+        tags=(FEATURE_LIST_LITERAL, FEATURE_TUPLE_LITERAL, FEATURE_SLICING, FEATURE_CONTAINER_DISPLAY),
+        source="""items = [0, 1, 2, 3]
+pair = (4, 5, 6, 7)
+print(items[:])
+print(items[2:2])
+print(pair[-3:-1])
 """,
     ),
     ProgramCase(

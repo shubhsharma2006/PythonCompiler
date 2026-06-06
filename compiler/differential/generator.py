@@ -85,6 +85,16 @@ class DifferentialProgramGenerator:
         op = self._rng.choice(["+", "-", "*", "%"])
         return f"({left} {op} {right})"
 
+    def _numeric_expr(self, depth: int = 0) -> str:
+        if depth >= 2:
+            return str(self._int_literal())
+        if self._rng.choice([True, False]):
+            return str(self._int_literal())
+        left = self._numeric_expr(depth + 1)
+        right = self._numeric_expr(depth + 1)
+        op = self._rng.choice(["+", "-", "*", "%"])
+        return f"({left} {op} {right})"
+
     def _container_literal(self, kind: str) -> tuple[str, str]:
         elem_kind = self._rng.choice(["int", "bool", "str"])
         count = self._rng.randint(2, 4)
@@ -107,8 +117,8 @@ class DifferentialProgramGenerator:
     def _arithmetic_program(self) -> tuple[str, tuple[str, ...]]:
         source = "\n".join(
             [
-                f"x = {self._scalar_expr()}",
-                f"y = {self._scalar_expr()}",
+                f"x = {self._numeric_expr()}",
+                f"y = {self._numeric_expr()}",
                 "print(x)",
                 "print(y)",
                 "print(x == y)",

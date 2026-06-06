@@ -33,6 +33,8 @@ def write_mismatch_bundle(
         "command": command,
         "vm_success": vm_result.success,
         "native_success": native_result.success,
+        "profile_status": "comparable",
+        "profile_errors": [],
     }
     (bundle_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -79,17 +81,40 @@ def write_summary(summary: ParitySummary, results: list[CaseResult], summary_roo
         f"- Mismatches: `{summary.mismatches}`",
         f"- Compile failures: `{summary.compile_failures}`",
         f"- Runtime failures: `{summary.runtime_failures}`",
+        f"- Profile violations: `{summary.profile_violations}`",
+        f"- Generated profile skips: `{summary.generated_profile_skips}`",
+        f"- Curated profile failures: `{summary.curated_profile_failures}`",
         f"- Agreement rate: `{summary.agreement_rate:.4f}`",
         f"- Profile-scoped VM features: `{summary.vm_features}`",
         f"- Profile-scoped native features: `{summary.native_features}`",
         f"- Features with zero observed mismatches: `{summary.parity_features}`",
         "",
-        "## Cases",
+        "## Feature Stats",
         "",
     ]
+    for feature_name, stats in sorted(summary.feature_stats.items()):
+        status = "green" if stats.green else "needs work"
+        lines.append(
+            f"- `{feature_name}`: total=`{stats.total_cases}` match=`{stats.exact_matches}` mismatch=`{stats.mismatches}` skipped=`{stats.skipped_cases}` status=`{status}`"
+        )
+
+    lines.extend(
+        [
+            "",
+        "## Cases",
+        "",
+        ]
+    )
     for result in results:
-        status = "match" if result.matches else "mismatch"
+        if result.profile_status == "profile_violation":
+            status = "profile violation"
+        elif result.matches:
+            status = "match"
+        else:
+            status = "mismatch"
         lines.append(f"- `{result.case.case_id}`: {status}")
+        if result.profile_errors:
+            lines.append(f"  - profile: `{'; '.join(result.profile_errors)}`")
         if result.bundle is not None:
             lines.append(f"  - bundle: `{result.bundle.bundle_dir}`")
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

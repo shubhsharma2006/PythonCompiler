@@ -4,6 +4,18 @@ from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
+class FeatureParity:
+    total_cases: int
+    exact_matches: int
+    mismatches: int
+    skipped_cases: int
+    green: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ProgramCase:
     case_id: str
     name: str
@@ -53,6 +65,8 @@ class CaseResult:
     mismatch_reasons: tuple[str, ...] = ()
     bundle: MismatchBundle | None = None
     skipped: bool = False
+    profile_status: str = "comparable"
+    profile_errors: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         payload = {
@@ -62,6 +76,8 @@ class CaseResult:
             "matches": self.matches,
             "mismatch_reasons": list(self.mismatch_reasons),
             "skipped": self.skipped,
+            "profile_status": self.profile_status,
+            "profile_errors": list(self.profile_errors),
         }
         if self.bundle is not None:
             payload["bundle"] = self.bundle.to_dict()
@@ -82,11 +98,19 @@ class ParitySummary:
     mismatches: int
     compile_failures: int
     runtime_failures: int
+    profile_violations: int
+    generated_profile_skips: int
+    curated_profile_failures: int
     agreement_rate: float
     vm_features: int
     native_features: int
     parity_features: int
+    feature_stats: dict[str, FeatureParity] = field(default_factory=dict)
     mismatch_bundles: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["feature_stats"] = {
+            name: stats.to_dict() for name, stats in self.feature_stats.items()
+        }
+        return payload
