@@ -89,13 +89,20 @@ def write_summary(summary: ParitySummary, results: list[CaseResult], summary_roo
         f"- Profile-scoped native features: `{summary.native_features}`",
         f"- Features with zero observed mismatches: `{summary.parity_features}`",
         "",
-        "## Feature Stats",
-        "",
     ]
+    lines.extend(
+        [
+            "",
+            "## Feature Stats",
+            "",
+            "| Feature | Total | Match | Mismatch | Skipped | Status |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
     for feature_name, stats in sorted(summary.feature_stats.items()):
-        status = "green" if stats.green else "needs work"
+        status = "✅ green" if stats.green else "⚠️ needs work"
         lines.append(
-            f"- `{feature_name}`: total=`{stats.total_cases}` match=`{stats.exact_matches}` mismatch=`{stats.mismatches}` skipped=`{stats.skipped_cases}` status=`{status}`"
+            f"| `{feature_name}` | {stats.total_cases} | {stats.exact_matches} | {stats.mismatches} | {stats.skipped_cases} | {status} |"
         )
 
     lines.extend(

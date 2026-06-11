@@ -231,6 +231,14 @@ class CCodeGenerator:
                                     "    if (py_error_occurred()) goto cleanup;"
                                 )
 
+                        # Python identity: `is` / `is not` → C pointer equality
+                        elif op in {"is", "is not"}:
+                            c_op = "==" if op == "is" else "!="
+                            lines.append(
+                                f"    {instruction.target} = "
+                                f"({left} {c_op} {right});"
+                            )
+
                         # normal operators
                         else:
                             lines.append(

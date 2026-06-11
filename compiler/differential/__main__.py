@@ -74,11 +74,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mismatches={summary['mismatches']}")
         print(f"skipped={summary['skipped_cases']}")
         print(f"profile_violations={summary['profile_violations']}")
+        print(f"agreement_rate={summary.get('agreement_rate', 0):.4f}")
         bundles = summary.get("mismatch_bundles", [])
         if bundles:
             print("mismatch_bundles=")
             for bundle in bundles:
                 print(bundle)
+        feature_stats = summary.get("feature_stats", {})
+        if feature_stats:
+            print("")
+            col = 30
+            print(f"{'feature':<{col}} {'total':>5} {'match':>5} {'mismatch':>8} {'status'}")
+            print("-" * (col + 24))
+            for fname, fstats in sorted(feature_stats.items()):
+                status = "green" if fstats.get("green") else "NEEDS WORK"
+                print(
+                    f"{fname:<{col}} {fstats['total_cases']:>5} {fstats['exact_matches']:>5}"
+                    f" {fstats['mismatches']:>8} {status}"
+                )
         return 0
 
     if args.command == "rerun-mismatches":

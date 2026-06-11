@@ -260,10 +260,12 @@ class DifferentialTests(unittest.TestCase):
 
     def test_latest_mismatch_bundles_and_rerun_mismatches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            # Mixed int/float floor-division passes profile validation but is rejected
+            # by native codegen, giving a stable VM-success / native-compile_error mismatch.
             case = ProgramCase(
                 case_id="forced_mismatch",
                 name="Forced Mismatch",
-                source="print(1 is 1)\n",
+                source="print(1 // 1.0)\n",
                 tags=("scalar_arithmetic",),
                 origin="generated",
             )

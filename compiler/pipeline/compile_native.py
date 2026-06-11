@@ -74,6 +74,9 @@ def _supports_native_homogeneous_container(expr, semantic) -> bool:
     container_type = semantic.expr_type(expr)
     if container_type not in {ValueType.LIST, ValueType.TUPLE}:
         return False
+    # Empty container literals are trivially homogeneous; IR defaults them to the INT suffix
+    if isinstance(expr, (ListExpr, TupleExpr)) and not expr.elements:
+        return True
     elem_type = _container_elem_type_for_expr(expr, semantic)
     return elem_type in SUPPORTED_CONTAINER_ELEM_TYPES
 
@@ -202,7 +205,7 @@ def _program_uses_unsupported_container_literals(program, semantic) -> bool:
         if not isinstance(node, (ListExpr, TupleExpr)):
             continue
         if not node.elements:
-            return True
+            continue  # empty containers are supported — IR defaults to INT suffix with size 0
         element_types = [semantic.expr_type(element) for element in node.elements]
         if any(elem_type == ValueType.UNKNOWN for elem_type in element_types):
             return True

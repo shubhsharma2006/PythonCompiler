@@ -7,6 +7,7 @@ from .profile import (
     FEATURE_EQUALITY,
     FEATURE_FOR_RANGE,
     FEATURE_FUNCTION_CALLS,
+    FEATURE_IDENTITY,
     FEATURE_IF_WHILE,
     FEATURE_INDEXING,
     FEATURE_LEN,
@@ -193,6 +194,104 @@ pair = ("a", "b")
 print(items)
 print(str(items))
 print(repr(pair))
+""",
+    ),
+    # --- Phase 4.1: intentionally difficult parity cases ---
+    ProgramCase(
+        case_id="identity_same_object",
+        name="Identity: same-reference list",
+        tags=(FEATURE_IDENTITY, FEATURE_LIST_LITERAL),
+        source="""a = []
+b = a
+print(a is b)
+""",
+    ),
+    ProgramCase(
+        case_id="identity_distinct_equal",
+        name="Identity: distinct but equal lists",
+        tags=(FEATURE_IDENTITY, FEATURE_LIST_LITERAL),
+        source="""x = [1]
+y = [1]
+print(x is y)
+""",
+    ),
+    ProgramCase(
+        case_id="slice_out_of_bounds",
+        name="Slice with out-of-bounds indices",
+        tags=(FEATURE_LIST_LITERAL, FEATURE_SLICING, FEATURE_CONTAINER_DISPLAY),
+        source="""a = [1, 2, 3]
+print(a[:])
+print(a[10:])
+print(a[:-10])
+""",
+    ),
+    ProgramCase(
+        case_id="range_empty_single",
+        name="For loop over range(0): body never executes",
+        tags=(FEATURE_FOR_RANGE,),
+        source="""total = 0
+for i in range(0):
+    total = total + i
+print(total)
+""",
+    ),
+    ProgramCase(
+        case_id="range_empty_equal_bounds",
+        name="For loop over range(n, n): empty range",
+        tags=(FEATURE_FOR_RANGE,),
+        source="""total = 0
+for i in range(5, 5):
+    total = total + i
+print(total)
+""",
+    ),
+    ProgramCase(
+        case_id="range_reverse_step",
+        name="For loop with reverse step range(5, 0, -1)",
+        tags=(FEATURE_FOR_RANGE,),
+        source="""for i in range(5, 0, -1):
+    print(i)
+""",
+    ),
+    ProgramCase(
+        case_id="str_empty_containers",
+        name="str() on empty list and tuple",
+        tags=(FEATURE_LIST_LITERAL, FEATURE_TUPLE_LITERAL, FEATURE_CONTAINER_DISPLAY),
+        source="""print(str([]))
+print(str(()))
+""",
+    ),
+    ProgramCase(
+        case_id="fstring_scalars",
+        name="f-string interpolation of int and bool",
+        tags=(FEATURE_SCALAR_ARITHMETIC,),
+        source="""x = 123
+y = True
+print(f"{x}")
+print(f"{y}")
+""",
+    ),
+    ProgramCase(
+        case_id="finally_clean_exit",
+        name="Try/finally with no exception raised",
+        tags=(FEATURE_TRY_FINALLY,),
+        source="""try:
+    print("body")
+finally:
+    print("cleanup")
+""",
+    ),
+    ProgramCase(
+        case_id="except_exception_instance",
+        name="Exception propagates through function call, caught by bare except",
+        tags=(FEATURE_BASIC_EXCEPTIONS, FEATURE_FUNCTION_CALLS),
+        source="""def inner():
+    raise "oops"
+
+try:
+    inner()
+except:
+    print("caught")
 """,
     ),
 )
